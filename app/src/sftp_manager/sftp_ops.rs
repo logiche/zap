@@ -274,3 +274,105 @@ fn shellexpand_path(path: &str) -> String {
     }
     path.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 测试 SftpOpsError::Connection Display 输出
+    #[test]
+    fn test_sftp_ops_error_display_connection() {
+        assert_eq!(
+            SftpOpsError::Connection("refused".into()).to_string(),
+            "连接错误: refused"
+        );
+    }
+
+    /// 测试 SftpOpsError::Operation Display 输出
+    #[test]
+    fn test_sftp_ops_error_display_operation() {
+        assert_eq!(
+            SftpOpsError::Operation("not found".into()).to_string(),
+            "操作错误: not found"
+        );
+    }
+
+    /// 测试 SftpOpsError::LocalIo Display 输出
+    #[test]
+    fn test_sftp_ops_error_display_local_io() {
+        assert_eq!(
+            SftpOpsError::LocalIo("disk full".into()).to_string(),
+            "本地 IO 错误: disk full"
+        );
+    }
+
+    /// 测试 SftpOpsError::NoCredentials Display 输出
+    #[test]
+    fn test_sftp_ops_error_display_no_credentials() {
+        assert_eq!(
+            SftpOpsError::NoCredentials("no key".into()).to_string(),
+            "未找到凭据: no key"
+        );
+    }
+
+    /// 测试 SftpOpsError::Cancelled Display 输出
+    #[test]
+    fn test_sftp_ops_error_display_cancelled() {
+        assert_eq!(SftpOpsError::Cancelled.to_string(), "传输已取消");
+    }
+
+    /// 测试从 std::io::Error 转换为 SftpOpsError
+    #[test]
+    fn test_sftp_ops_error_from_io_error() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let ops_err: SftpOpsError = io_err.into();
+        assert!(matches!(ops_err, SftpOpsError::LocalIo(_)));
+    }
+
+    /// 测试从 zap_sftp::SftpError 转换为 SftpOpsError
+    #[test]
+    fn test_sftp_ops_error_from_sftp_error() {
+        let sftp_err = zap_sftp::SftpError::General("test error".into());
+        let ops_err: SftpOpsError = sftp_err.into();
+        assert!(matches!(ops_err, SftpOpsError::Operation(_)));
+    }
+
+    /// 测试 shellexpand_path 展开 ~/ 路径
+    #[test]
+    fn test_shellexpand_path_home() {
+        let home = dirs::home_dir().unwrap_or_default();
+        let result = shellexpand_path("~/test");
+        if !home.as_os_str().is_empty() {
+            assert!(!result.starts_with('~'));
+            assert!(result.contains("test"));
+        }
+    }
+
+    /// 测试 shellexpand_path 不变绝对路径
+    #[test]
+    fn test_shellexpand_path_absolute() {
+        let result = shellexpand_path("/absolute/path");
+        assert_eq!(result, "/absolute/path");
+    }
+
+    /// 测试 shellexpand_path 不变相对路径
+    #[test]
+    fn test_shellexpand_path_relative() {
+        let result = shellexpand_path("relative/path");
+        assert_eq!(result, "relative/path");
+    }
+
+    /// 测试 shellexpand_path 仅 ~ 不展开
+    #[test]
+    fn test_shellexpand_path_tilde_only() {
+        let result = shellexpand_path("~");
+        assert_eq!(result, "~");
+    }
+
+    /// 测试 shellexpand_path 空路径
+    #[test]
+    fn test_shellexpand_path_empty() {
+        let result = shellexpand_path("");
+        assert_eq!(result, "");
+    }
+}
