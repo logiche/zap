@@ -1,5 +1,5 @@
 [package]
-name = "warp_sftp"
+name = "zap_sftp"
 version = "0.1.0"
 edition = "2021"
 
