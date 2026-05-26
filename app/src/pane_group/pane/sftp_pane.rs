@@ -27,8 +27,9 @@ pub struct SftpPane {
 impl SftpPane {
     /// 创建新的 SFTP 浏览器 pane
     pub fn new<V: View>(node_id: String, ctx: &mut ViewContext<V>) -> Self {
+        let id_for_view = node_id.clone();
         let browser_view =
-            ctx.add_typed_action_view(|ctx| SftpBrowserView::new(ctx));
+            ctx.add_typed_action_view(move |ctx| SftpBrowserView::new(id_for_view.clone(), ctx));
         let pane_configuration = browser_view.as_ref(ctx).pane_configuration();
         let pane_view = ctx.add_typed_action_view(|ctx| {
             let pane_id = PaneId::from_sftp_pane_ctx(ctx);
