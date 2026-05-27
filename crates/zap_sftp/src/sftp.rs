@@ -98,4 +98,11 @@ impl Sftp {
         let target = sftp.readlink(path)?;
         Ok(target)
     }
+
+    /// 解析远程路径的真实路径
+    pub fn realpath(&self, path: &Path) -> Result<PathBuf, SftpError> {
+        let sftp = self.inner.lock().unwrap();
+        let real = sftp.realpath(path)?;
+        Ok(real)
+    }
 }

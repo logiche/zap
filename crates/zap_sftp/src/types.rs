@@ -67,13 +67,7 @@ pub struct Metadata {
 impl Metadata {
     /// 从 ssh2::FileStat 创建
     pub fn from_ssh2(m: ssh2::FileStat) -> Self {
-        let file_type = if m.is_dir() {
-            FileType::Dir
-        } else if m.is_file() {
-            FileType::File
-        } else {
-            FileType::Other
-        };
+        let file_type = FileType::from_mode(m.perm.unwrap_or(0));
         Self {
             file_type,
             permissions: FilePermissions::from_mode(m.perm.unwrap_or(0)),

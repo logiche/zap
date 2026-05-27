@@ -4,7 +4,7 @@
 //! author: logic
 //! date: 2026-05-26
 
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{ConstrainedBox, Container, Hoverable, Text};
@@ -26,7 +26,10 @@ pub fn render_breadcrumb(current_path: &PathBuf, appearance: &Appearance) -> Vec
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
 
-    let components: Vec<_> = current_path.components().collect();
+    let components: Vec<_> = current_path
+        .components()
+        .filter(|c| !matches!(c, Component::RootDir))
+        .collect();
 
     // 空路径或只有根路径时只显示 "/"
     if components.is_empty() {

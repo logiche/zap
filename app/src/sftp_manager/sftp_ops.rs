@@ -7,6 +7,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use zap_sftp::session::{AuthMethod, SftpSession};
 use zap_sftp::types::OpenOptions;
@@ -221,6 +222,82 @@ pub fn download_file_streaming(
     }
 
     local_file.flush().map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
+    Ok(())
+}
+
+/// 递归上传本地目录到远程
+pub fn upload_dir_recursive(
+    sftp: &Sftp,
+    local_dir: &Path,
+    remote_dir: &Path,
+    progress_cb: Option<&ProgressCallback>,
+    cancel_flag: &AtomicBool,
+) -> Result<(), SftpOpsError> {
+    if cancel_flag.load(Ordering::SeqCst) {
+        return Err(SftpOpsError::Cancelled);
+    }
+
+    sftp.create_dir(remote_dir)?;
+
+    let entries = fs::read_dir(local_dir)
+        .map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
+
+    for entry in entries {
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(SftpOpsError::Cancelled);
+        }
+
+        let entry = entry.map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
+        let file_name = entry.file_name();
+        let remote_path = remote_dir.join(&file_name);
+
+        let file_type = entry
+            .file_type()
+            .map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
+
+        if file_type.is_dir() {
+            upload_dir_recursive(sftp, &entry.path(), &remote_path, progress_cb, cancel_flag)?;
+        } else {
+            upload_file_streaming(sftp, &entry.path(), &remote_path, progress_cb)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// 递归下载远程目录到本地
+pub fn download_dir_recursive(
+    sftp: &Sftp,
+    remote_dir: &Path,
+    local_dir: &Path,
+    progress_cb: Option<&ProgressCallback>,
+    cancel_flag: &AtomicBool,
+) -> Result<(), SftpOpsError> {
+    if cancel_flag.load(Ordering::SeqCst) {
+        return Err(SftpOpsError::Cancelled);
+    }
+
+    fs::create_dir_all(local_dir).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
+
+    let entries = sftp.read_dir(remote_dir)?;
+
+    for entry in entries {
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(SftpOpsError::Cancelled);
+        }
+
+        let local_path = local_dir.join(&entry.name);
+
+        match entry.metadata.file_type {
+            zap_sftp::types::FileType::Dir => {
+                download_dir_recursive(sftp, &entry.path, &local_path, progress_cb, cancel_flag)?;
+            }
+            _ => {
+                download_file_streaming(sftp, &entry.path, &local_path, progress_cb)?;
+            }
+        }
+    }
+
     Ok(())
 }
 

@@ -370,23 +370,36 @@ fn render_move_dialog(
         .with_color(text_color.into())
         .finish();
 
+    let source_name = source
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
     let desc = format!(
-        "将 {} 移动到 {}",
-        source.display(),
+        "将 \"{}\" 移动到 {}",
+        source_name,
         target_dir.display()
     );
     let desc_el = Text::new_inline(desc, ui_font, ui_font_size)
         .with_color(sub_color.into())
         .finish();
 
+    let confirm_btn = render_button("移动", true, appearance, SftpBrowserAction::ConfirmMove);
     let cancel_btn = render_close_button(appearance);
+
+    let buttons = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_alignment(MainAxisAlignment::End)
+        .with_spacing(8.0)
+        .with_child(Clipped::new(confirm_btn).finish())
+        .with_child(Clipped::new(cancel_btn).finish())
+        .finish();
 
     let content = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_spacing(12.0)
         .with_child(title_el)
         .with_child(desc_el)
-        .with_child(cancel_btn)
+        .with_child(buttons)
         .finish();
 
     ConstrainedBox::new(dialog_shell(content, appearance))

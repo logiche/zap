@@ -8,10 +8,14 @@ pub mod breadcrumb;
 pub mod browser;
 pub mod context_menu;
 pub mod dialogs;
+pub mod drop_target;
 pub mod file_list;
 pub mod sftp_ops;
 pub mod transfer_panel;
 pub mod types;
+
+#[cfg(test)]
+mod browser_test;
 
 #[allow(unused_imports)]
 pub use browser::{SftpBrowserAction, SftpBrowserView};

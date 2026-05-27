@@ -363,4 +363,105 @@ mod tests {
         };
         assert!(matches!(details, Dialog::FileDetails { .. }));
     }
+
+    /// 测试 Dialog::Move 变体
+    #[test]
+    fn test_dialog_move_variant() {
+        let dialog = Dialog::Move {
+            source: PathBuf::from("/home/user/file.txt"),
+            target_dir: PathBuf::from("/home/user/backup"),
+        };
+        assert!(matches!(dialog, Dialog::Move { .. }));
+    }
+
+    /// 测试 Dialog::OverwriteConfirm 变体
+    #[test]
+    fn test_dialog_overwrite_confirm_variant() {
+        let dialog = Dialog::OverwriteConfirm {
+            source: PathBuf::from("/home/user/file.txt"),
+            target: PathBuf::from("/home/user/file_copy.txt"),
+        };
+        assert!(matches!(dialog, Dialog::OverwriteConfirm { .. }));
+    }
+
+    /// 测试 TransferState 各变体 Debug 输出
+    #[test]
+    fn test_transfer_state_variants() {
+        assert!(matches!(TransferState::Pending, TransferState::Pending));
+        assert!(matches!(TransferState::InProgress, TransferState::InProgress));
+        assert!(matches!(TransferState::Completed, TransferState::Completed));
+        assert!(matches!(TransferState::Cancelled, TransferState::Cancelled));
+        let failed = TransferState::Failed("io error".into());
+        assert!(matches!(failed, TransferState::Failed(_)));
+    }
+
+    /// 测试 format_size 正好 1 KB
+    #[test]
+    fn test_format_size_exact_kb() {
+        assert_eq!(format_size(1024), "1.0 KB");
+    }
+
+    /// 测试 format_size 正好 1 MB
+    #[test]
+    fn test_format_size_exact_mb() {
+        assert_eq!(format_size(1024 * 1024), "1.0 MB");
+    }
+
+    /// 测试 format_size 正好 1 GB
+    #[test]
+    fn test_format_size_exact_gb() {
+        assert_eq!(format_size(1024 * 1024 * 1024), "1.0 GB");
+    }
+
+    /// 测试 format_size 1 字节
+    #[test]
+    fn test_format_size_one_byte() {
+        assert_eq!(format_size(1), "1 B");
+    }
+
+    /// 测试 format_size 大数值
+    #[test]
+    fn test_format_size_large() {
+        let size = 5 * 1024 * 1024 * 1024u64; // 5 GB
+        assert_eq!(format_size(size), "5.0 GB");
+    }
+
+    /// 测试 format_size 接近边界值（1023 B）
+    #[test]
+    fn test_format_size_near_kb_boundary() {
+        assert_eq!(format_size(1023), "1023 B");
+    }
+
+    /// 测试 TransferTask Clone 一致性
+    #[test]
+    fn test_transfer_task_clone() {
+        let task = TransferTask::new(
+            42,
+            PathBuf::from("/src"),
+            PathBuf::from("/dst"),
+            TransferDirection::Download,
+            999,
+        );
+        let cloned = task.clone();
+        assert_eq!(cloned.id, 42);
+        assert_eq!(cloned.total_size, 999);
+        assert_eq!(cloned.direction, TransferDirection::Download);
+    }
+
+    /// 测试 FileEntry Clone 一致性
+    #[test]
+    fn test_file_entry_clone() {
+        let entry = FileEntry {
+            name: "doc.txt".into(),
+            path: PathBuf::from("/home/doc.txt"),
+            file_type: FileEntryType::File,
+            size: 2048,
+            modified: Some("2026-01-01".into()),
+            permissions: Some("rw-r--r--".into()),
+        };
+        let cloned = entry.clone();
+        assert_eq!(cloned.name, "doc.txt");
+        assert_eq!(cloned.size, 2048);
+        assert_eq!(cloned.modified, Some("2026-01-01".into()));
+    }
 }

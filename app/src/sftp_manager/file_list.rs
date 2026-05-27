@@ -192,6 +192,7 @@ pub fn render_header(appearance: &Appearance) -> Box<dyn Element> {
 /// 渲染文件行列表
 pub fn render_file_rows(
     entries: &[FileEntry],
+    filtered_indices: &[usize],
     selected: &HashSet<usize>,
     mouse_handles: &[MouseStateHandle],
     appearance: &Appearance,
@@ -199,7 +200,8 @@ pub fn render_file_rows(
     let mut col = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
-    for (index, entry) in entries.iter().enumerate() {
+    for &index in filtered_indices {
+        let entry = &entries[index];
         let is_selected = selected.contains(&index);
         let mouse_handle = mouse_handles.get(index).cloned().unwrap_or_default();
         let row = render_file_row(entry, index, is_selected, mouse_handle, appearance);
