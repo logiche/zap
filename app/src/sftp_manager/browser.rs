@@ -12,21 +12,29 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warp_ssh_manager::{KeychainSecretStore, SshRepository};
 use warpui::elements::{
-    Align, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Element, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Shrinkable, Text,
+    Align, Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, Element, Fill, Flex, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Shrinkable, Text,
 };
-use warpui::platform::{Cursor, FilePickerConfiguration};
-use warpui::{AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+use warpui::platform::{Cursor, FilePickerConfiguration, SaveFilePickerConfiguration};
+use warpui::{
+    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
 
-use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions};
+use crate::editor::{
+    EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions,
+};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 
 use super::context_menu::ContextMenuState;
 use super::sftp_ops;
-use super::types::{ConnectionState, Dialog, FileEntry, FileEntryType, TransferDirection, TransferTask};
+use super::types::{
+    ConnectionState, Dialog, FileEntry, FileEntryType, TransferDirection, TransferState,
+    TransferTask,
+};
 
 /// 工具栏按钮尺寸
 const TOOLBAR_BTN_SIZE: f32 = 28.0;
@@ -72,8 +80,6 @@ pub enum SftpBrowserAction {
     ConfirmNewFolder,
     /// 确认覆盖
     ConfirmOverwrite,
-    /// 切换传输面板
-    ToggleTransferPanel,
     /// 弹出右键菜单
     ContextMenu(usize),
     /// 关闭右键菜单
@@ -92,10 +98,20 @@ pub enum SftpBrowserAction {
     DeleteSelected,
     /// 创建文件夹（键盘快捷键）
     CreateFolder,
+    /// 文件拖入浏览器区域
+    DragFilesEnter,
+    /// 文件拖出浏览器区域
+    DragFilesLeave,
     /// 拖放文件上传
     DragAndDropFiles(Vec<PathBuf>),
     /// 执行上传
     ExecuteUpload(String),
+    /// 执行保存下载（用户已选择路径）
+    DownloadSaveAs { index: usize, local_path: String },
+    /// 确认移动
+    ConfirmMove,
+    /// 取消传输任务
+    CancelTransfer(usize),
 }
 
 /// SFTP 浏览器视图
@@ -115,33 +131,33 @@ pub struct SftpBrowserView {
     sftp: Option<zap_sftp::Sftp>,
     // ---- 导航 ----
     /// 当前路径
-    current_path: PathBuf,
+    pub(crate) current_path: PathBuf,
     /// 当前目录文件条目
-    entries: Vec<FileEntry>,
+    pub(crate) entries: Vec<FileEntry>,
     /// 选中的条目索引集合
-    selected: HashSet<usize>,
+    pub(crate) selected: HashSet<usize>,
     /// 路径历史记录
     path_history: Vec<PathBuf>,
     /// 历史记录当前位置
     history_index: usize,
     // ---- 传输 ----
     /// 传输任务列表
-    transfers: Vec<TransferTask>,
+    pub(crate) transfers: Vec<TransferTask>,
     /// 下一个传输任务 ID
     next_transfer_id: usize,
-    /// 传输面板是否展开
-    transfers_expanded: bool,
     // ---- UI 状态 ----
     /// 当前打开的对话框
     dialog: Option<Dialog>,
     /// 错误消息
-    error_message: Option<String>,
+    pub(crate) error_message: Option<String>,
     /// 是否正在加载
     is_loading: bool,
     /// 右键菜单状态
     context_menu: Option<ContextMenuState>,
     /// 搜索过滤文本
-    search_filter: Option<String>,
+    pub(crate) search_filter: Option<String>,
+    /// 是否有文件拖拽悬停在浏览器上
+    pub(crate) is_drag_hovering: bool,
     // ---- 鼠标句柄 ----
     /// 刷新按钮
     refresh_btn: MouseStateHandle,
@@ -160,6 +176,8 @@ pub struct SftpBrowserView {
     rename_editor: ViewHandle<EditorView>,
     /// 新建文件夹编辑器
     new_folder_editor: ViewHandle<EditorView>,
+    /// 搜索过滤编辑器
+    search_editor: ViewHandle<EditorView>,
     // ---- 文件行鼠标句柄 ----
     /// 每行文件条目的鼠标状态句柄
     row_mouse_handles: Vec<MouseStateHandle>,
@@ -171,9 +189,10 @@ pub struct SftpBrowserView {
 impl SftpBrowserView {
     /// 创建新的 SFTP 浏览器视图
     pub fn new(node_id: String, ctx: &mut ViewContext<Self>) -> Self {
-        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("SFTP Browser"));
+        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("文件管理"));
         let rename_editor = make_editor("Enter new name", ctx);
         let new_folder_editor = make_editor("Folder name", ctx);
+        let search_editor = make_editor("Search files...", ctx);
 
         let mut me = Self {
             node_id,
@@ -189,12 +208,12 @@ impl SftpBrowserView {
             history_index: 0,
             transfers: Vec::new(),
             next_transfer_id: 1,
-            transfers_expanded: false,
             dialog: None,
             error_message: None,
             is_loading: false,
             context_menu: None,
             search_filter: None,
+            is_drag_hovering: false,
             refresh_btn: MouseStateHandle::default(),
             up_btn: MouseStateHandle::default(),
             back_btn: MouseStateHandle::default(),
@@ -203,14 +222,16 @@ impl SftpBrowserView {
             new_folder_btn: MouseStateHandle::default(),
             rename_editor,
             new_folder_editor,
+            search_editor,
             row_mouse_handles: Vec::new(),
             scroll_state: ClippedScrollStateHandle::default(),
         };
 
         // 订阅重命名编辑器事件
         let rename_editor_handle = me.rename_editor.clone();
-        ctx.subscribe_to_view(&rename_editor_handle, |me, _source, event, ctx| {
-            match event {
+        ctx.subscribe_to_view(
+            &rename_editor_handle,
+            |me, _source, event, ctx| match event {
                 EditorEvent::Enter => {
                     me.handle_action(&SftpBrowserAction::ConfirmRename, ctx);
                 }
@@ -219,13 +240,14 @@ impl SftpBrowserView {
                     ctx.notify();
                 }
                 _ => {}
-            }
-        });
+            },
+        );
 
         // 订阅新建文件夹编辑器事件
         let new_folder_editor_handle = me.new_folder_editor.clone();
-        ctx.subscribe_to_view(&new_folder_editor_handle, |me, _source, event, ctx| {
-            match event {
+        ctx.subscribe_to_view(
+            &new_folder_editor_handle,
+            |me, _source, event, ctx| match event {
                 EditorEvent::Enter => {
                     me.handle_action(&SftpBrowserAction::ConfirmNewFolder, ctx);
                 }
@@ -234,8 +256,32 @@ impl SftpBrowserView {
                     ctx.notify();
                 }
                 _ => {}
-            }
-        });
+            },
+        );
+
+        // 订阅搜索编辑器事件
+        let search_editor_handle = me.search_editor.clone();
+        ctx.subscribe_to_view(
+            &search_editor_handle,
+            |me, _source, event, ctx| match event {
+                EditorEvent::Escape => {
+                    me.search_filter = None;
+                    me.search_editor
+                        .update(ctx, |e, ctx| e.set_buffer_text("", ctx));
+                    ctx.notify();
+                }
+                _ => {
+                    let text = me.search_editor.as_ref(ctx).buffer_text(ctx);
+                    let trimmed = text.trim().to_string();
+                    if trimmed.is_empty() {
+                        me.search_filter = None;
+                    } else {
+                        me.search_filter = Some(trimmed);
+                    }
+                    ctx.notify();
+                }
+            },
+        );
 
         // 发起连接
         me.connect_to_server(ctx);
@@ -267,17 +313,23 @@ impl SftpBrowserView {
                     Ok(session) => {
                         match session.sftp() {
                             Ok(sftp) => {
+                                // 解析用户 home 目录
+                                if let Ok(home) = sftp.realpath(std::path::Path::new(".")) {
+                                    self.current_path = normalize_remote_path(&home);
+                                } else {
+                                    self.current_path = PathBuf::from("/");
+                                }
+                                self.path_history = vec![self.current_path.clone()];
+                                self.history_index = 0;
                                 self.connection = ConnectionState::Connected;
                                 self._session = Some(session);
                                 self.sftp = Some(sftp);
                                 self.is_loading = false;
-                                // 列出根目录
                                 self.refresh_dir(ctx);
                             }
                             Err(e) => {
-                                self.connection = ConnectionState::Failed(format!(
-                                    "创建 SFTP 通道失败: {e}"
-                                ));
+                                self.connection =
+                                    ConnectionState::Failed(format!("创建 SFTP 通道失败: {e}"));
                                 self.is_loading = false;
                                 self.error_message = Some(format!("创建 SFTP 通道失败: {e}"));
                                 ctx.notify();
@@ -324,15 +376,13 @@ impl SftpBrowserView {
         match sftp_ops::list_dir(&sftp, &path) {
             Ok(mut entries) => {
                 // 排序：目录在前，文件在后，各自按名称排序
-                entries.sort_by(|a, b| {
-                    match (a.file_type, b.file_type) {
-                        (FileEntryType::Directory, FileEntryType::Directory) => {
-                            a.name.to_lowercase().cmp(&b.name.to_lowercase())
-                        }
-                        (FileEntryType::Directory, _) => std::cmp::Ordering::Less,
-                        (_, FileEntryType::Directory) => std::cmp::Ordering::Greater,
-                        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                entries.sort_by(|a, b| match (a.file_type, b.file_type) {
+                    (FileEntryType::Directory, FileEntryType::Directory) => {
+                        a.name.to_lowercase().cmp(&b.name.to_lowercase())
                     }
+                    (FileEntryType::Directory, _) => std::cmp::Ordering::Less,
+                    (_, FileEntryType::Directory) => std::cmp::Ordering::Greater,
+                    _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
                 });
                 self.entries = entries;
                 self.selected.clear();
@@ -365,6 +415,7 @@ impl SftpBrowserView {
 
     /// 导航到指定路径并更新历史记录
     fn navigate_to(&mut self, path: PathBuf, ctx: &mut ViewContext<Self>) {
+        let path = normalize_remote_path(&path);
         if path == self.current_path {
             return;
         }
@@ -379,7 +430,7 @@ impl SftpBrowserView {
     /// 返回上级目录
     fn go_up(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(parent) = self.current_path.parent() {
-            let parent = parent.to_path_buf();
+            let parent = normalize_remote_path(&parent.to_path_buf());
             if parent != self.current_path {
                 self.navigate_to(parent, ctx);
             }
@@ -457,9 +508,11 @@ impl SftpBrowserView {
         };
 
         for path in &paths {
-            let result = if self.entries.iter().any(|e| {
-                e.path == *path && matches!(e.file_type, FileEntryType::Directory)
-            }) {
+            let result = if self
+                .entries
+                .iter()
+                .any(|e| e.path == *path && matches!(e.file_type, FileEntryType::Directory))
+            {
                 sftp_ops::delete_dir_recursive(&sftp, path)
             } else {
                 sftp_ops::delete_file(&sftp, path)
@@ -478,30 +531,19 @@ impl SftpBrowserView {
     /// 创建下载传输任务
     fn download_entry(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
         if let Some(entry) = self.entries.get(index) {
-            let local_path = dirs::download_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(&entry.name);
-
-            // 检查是否已存在同名文件
-            if local_path.exists() {
-                self.dialog = Some(Dialog::OverwriteConfirm {
-                    source: entry.path.clone(),
-                    target: local_path,
-                });
-                ctx.notify();
-                return;
-            }
-
-            let task = TransferTask::new(
-                self.next_transfer_id,
-                entry.path.clone(),
-                local_path,
-                TransferDirection::Download,
-                entry.size,
+            let default_name = entry.name.clone();
+            let idx = index;
+            ctx.open_save_file_picker(
+                move |path_opt: Option<String>, _me: &mut Self, _ctx: &mut ViewContext<Self>| {
+                    if let Some(path) = path_opt {
+                        _ctx.dispatch_typed_action_deferred(SftpBrowserAction::DownloadSaveAs {
+                            index: idx,
+                            local_path: path,
+                        });
+                    }
+                },
+                SaveFilePickerConfiguration::new().with_default_filename(default_name),
             );
-            self.next_transfer_id += 1;
-            self.transfers.push(task);
-            ctx.notify();
         }
     }
 
@@ -548,14 +590,10 @@ impl SftpBrowserView {
 
         Hoverable::new(handle, move |_| {
             Container::new(
-                ConstrainedBox::new(
-                    Container::new(icon_el)
-                        .with_uniform_padding(6.0)
-                        .finish(),
-                )
-                .with_width(TOOLBAR_BTN_SIZE)
-                .with_height(TOOLBAR_BTN_SIZE)
-                .finish(),
+                ConstrainedBox::new(Container::new(icon_el).with_uniform_padding(6.0).finish())
+                    .with_width(TOOLBAR_BTN_SIZE)
+                    .with_height(TOOLBAR_BTN_SIZE)
+                    .finish(),
             )
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
             .finish()
@@ -637,10 +675,8 @@ impl SftpBrowserView {
         let theme = appearance.theme();
         let text_color = theme.sub_text_color(theme.background());
 
-        let parts: Vec<Box<dyn Element>> = super::breadcrumb::render_breadcrumb(
-            &self.current_path,
-            appearance,
-        );
+        let parts: Vec<Box<dyn Element>> =
+            super::breadcrumb::render_breadcrumb(&self.current_path, appearance);
 
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -676,15 +712,9 @@ impl SftpBrowserView {
         let text_color = theme.sub_text_color(theme.background());
 
         let (msg, icon) = match &self.connection {
-            ConnectionState::Connecting => (
-                "Connecting...".to_string(),
-                Icon::Loading,
-            ),
+            ConnectionState::Connecting => ("Connecting...".to_string(), Icon::Loading),
             ConnectionState::Failed(err) => (err.clone(), Icon::AlertCircle),
-            ConnectionState::Disconnected => (
-                "Disconnected".to_string(),
-                Icon::AlertCircle,
-            ),
+            ConnectionState::Disconnected => ("Disconnected".to_string(), Icon::AlertCircle),
             ConnectionState::Connected => unreachable!(),
         };
 
@@ -705,12 +735,7 @@ impl SftpBrowserView {
             .with_main_axis_size(MainAxisSize::Min)
             .finish();
 
-        Align::new(
-            Container::new(content)
-                .with_uniform_padding(24.0)
-                .finish(),
-        )
-        .finish()
+        Align::new(Container::new(content).with_uniform_padding(24.0).finish()).finish()
     }
 
     /// 渲染错误消息
@@ -744,14 +769,9 @@ impl SftpBrowserView {
             .iter()
             .enumerate()
             .filter(|(_, entry)| {
-                self.search_filter
-                    .as_ref()
-                    .map_or(true, |filter| {
-                        entry
-                            .name
-                            .to_lowercase()
-                            .contains(&filter.to_lowercase())
-                    })
+                self.search_filter.as_ref().map_or(true, |filter| {
+                    entry.name.to_lowercase().contains(&filter.to_lowercase())
+                })
             })
             .map(|(i, _)| i)
             .collect();
@@ -765,12 +785,8 @@ impl SftpBrowserView {
             .with_color(theme.sub_text_color(theme.background()).into())
             .finish();
 
-            return Align::new(
-                Container::new(text_el)
-                    .with_uniform_padding(24.0)
-                    .finish(),
-            )
-            .finish();
+            return Align::new(Container::new(text_el).with_uniform_padding(24.0).finish())
+                .finish();
         }
 
         // 表头
@@ -779,6 +795,7 @@ impl SftpBrowserView {
         // 文件行
         let rows = super::file_list::render_file_rows(
             &self.entries,
+            &filtered_indices,
             &self.selected,
             &self.row_mouse_handles,
             appearance,
@@ -787,17 +804,13 @@ impl SftpBrowserView {
         Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(header)
-            .with_child(Shrinkable::new(1.0, rows).finish())
+            .with_child(rows)
             .finish()
     }
 
     /// 渲染传输面板
     fn render_transfers(&self, appearance: &Appearance) -> Box<dyn Element> {
-        super::transfer_panel::render_transfer_panel(
-            &self.transfers,
-            self.transfers_expanded,
-            appearance,
-        )
+        super::transfer_panel::render_transfer_panel(&self.transfers, appearance)
     }
 
     /// 渲染搜索栏
@@ -805,41 +818,19 @@ impl SftpBrowserView {
         let theme = appearance.theme();
         let text_color = theme.sub_text_color(theme.background());
 
-        let filter_text = self
-            .search_filter
-            .as_deref()
-            .unwrap_or("")
-            .to_string();
+        let search_icon = ConstrainedBox::new(Icon::Search.to_warpui_icon(text_color).finish())
+            .with_width(14.0)
+            .with_height(14.0)
+            .finish();
 
-        let search_icon = ConstrainedBox::new(
-            Icon::Search
-                .to_warpui_icon(text_color)
-                .finish(),
-        )
-        .with_width(14.0)
-        .with_height(14.0)
-        .finish();
-
-        let text_el = if filter_text.is_empty() {
-            Text::new_inline(
-                "Search files...".to_string(),
-                appearance.ui_font_family(),
-                appearance.ui_font_size(),
-            )
-            .with_color(theme.disabled_ui_text_color().into())
-            .finish()
-        } else {
-            Text::new_inline(filter_text, appearance.ui_font_family(), appearance.ui_font_size())
-                .with_color(text_color.into())
-                .finish()
-        };
+        let editor_el = Container::new(ChildView::new(&self.search_editor).finish()).finish();
 
         Container::new(
             Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(4.0)
                 .with_child(search_icon)
-                .with_child(Shrinkable::new(1.0, text_el).finish())
+                .with_child(Shrinkable::new(1.0, editor_el).finish())
                 .finish(),
         )
         .with_padding_left(8.0)
@@ -856,14 +847,10 @@ impl SftpBrowserView {
         let theme = appearance.theme();
         let text_color = theme.sub_text_color(theme.background());
 
-        let icon_el = ConstrainedBox::new(
-            Icon::Loading
-                .to_warpui_icon(text_color)
-                .finish(),
-        )
-        .with_width(24.0)
-        .with_height(24.0)
-        .finish();
+        let icon_el = ConstrainedBox::new(Icon::Loading.to_warpui_icon(text_color).finish())
+            .with_width(24.0)
+            .with_height(24.0)
+            .finish();
 
         let text_el = Text::new_inline(
             "Loading...".to_string(),
@@ -892,20 +879,26 @@ impl SftpBrowserView {
 
 /// 构建重命名后的完整路径
 fn build_rename_path(original_path: &PathBuf, new_name: &str) -> PathBuf {
-    match original_path.parent() {
+    let path = match original_path.parent() {
         Some(parent) => parent.join(new_name),
         None => PathBuf::from(new_name),
-    }
+    };
+    normalize_remote_path(&path)
 }
 
 /// 构建新建文件夹的完整路径
 fn build_new_folder_path(parent_path: &PathBuf, folder_name: &str) -> PathBuf {
-    parent_path.join(folder_name)
+    normalize_remote_path(&parent_path.join(folder_name))
 }
 
 /// 构建上传后的远程路径
 fn build_upload_remote_path(current_path: &PathBuf, local_file_name: &str) -> PathBuf {
-    current_path.join(local_file_name)
+    normalize_remote_path(&current_path.join(local_file_name))
+}
+
+/// 规范化远程路径，将反斜杠替换为正斜杠
+fn normalize_remote_path(path: &PathBuf) -> PathBuf {
+    PathBuf::from(path.to_string_lossy().replace('\\', "/"))
 }
 
 impl Entity for SftpBrowserView {
@@ -960,9 +953,7 @@ impl TypedActionView for SftpBrowserView {
                     move |result, ctx: &mut ViewContext<SftpBrowserView>| match result {
                         Ok(paths) => {
                             for path in paths {
-                                ctx.dispatch_typed_action(
-                                    &SftpBrowserAction::ExecuteUpload(path),
-                                );
+                                ctx.dispatch_typed_action(&SftpBrowserAction::ExecuteUpload(path));
                             }
                         }
                         Err(e) => {
@@ -989,10 +980,7 @@ impl TypedActionView for SftpBrowserView {
                     ..
                 }) = &self.dialog
                 {
-                    let new_name = self
-                        .rename_editor
-                        .as_ref(ctx)
-                        .buffer_text(ctx);
+                    let new_name = self.rename_editor.as_ref(ctx).buffer_text(ctx);
                     let new_name = new_name.trim().to_string();
                     if new_name.is_empty() {
                         self.error_message = Some("名称不能为空".to_string());
@@ -1017,20 +1005,15 @@ impl TypedActionView for SftpBrowserView {
                 }
             }
             SftpBrowserAction::ConfirmNewFolder => {
-                if let Some(Dialog::CreateFolder { parent_path }) = &self.dialog
-                {
-                    let folder_name = self
-                        .new_folder_editor
-                        .as_ref(ctx)
-                        .buffer_text(ctx);
+                if let Some(Dialog::CreateFolder { parent_path }) = &self.dialog {
+                    let folder_name = self.new_folder_editor.as_ref(ctx).buffer_text(ctx);
                     let folder_name = folder_name.trim().to_string();
                     if folder_name.is_empty() {
                         self.error_message = Some("文件夹名称不能为空".to_string());
                         ctx.notify();
                         return;
                     }
-                    let folder_path =
-                        build_new_folder_path(parent_path, &folder_name);
+                    let folder_path = build_new_folder_path(parent_path, &folder_name);
 
                     if let Some(sftp) = &self.sftp {
                         match sftp_ops::create_dir(sftp, &folder_path) {
@@ -1050,10 +1033,6 @@ impl TypedActionView for SftpBrowserView {
             SftpBrowserAction::ConfirmOverwrite => {
                 // 简化处理：关闭对话框，执行下载
                 self.dialog = None;
-                ctx.notify();
-            }
-            SftpBrowserAction::ToggleTransferPanel => {
-                self.transfers_expanded = !self.transfers_expanded;
                 ctx.notify();
             }
             SftpBrowserAction::ContextMenu(index) => {
@@ -1094,23 +1073,110 @@ impl TypedActionView for SftpBrowserView {
             SftpBrowserAction::CreateFolder => {
                 self.handle_action(&SftpBrowserAction::NewFolder, ctx);
             }
+            SftpBrowserAction::ConfirmMove => {
+                if let Some(Dialog::Move { source, target_dir }) = &self.dialog {
+                    let file_name = source
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let target_path = target_dir.join(&file_name);
+
+                    if let Some(sftp) = &self.sftp {
+                        match sftp_ops::rename(sftp, source, &target_path) {
+                            Ok(()) => {
+                                self.dialog = None;
+                                self.error_message = None;
+                                self.refresh_dir(ctx);
+                            }
+                            Err(e) => {
+                                self.error_message = Some(format!("移动失败: {e}"));
+                                ctx.notify();
+                            }
+                        }
+                    }
+                }
+            }
+            SftpBrowserAction::CancelTransfer(task_id) => {
+                let task_id = *task_id;
+                if let Some(t) = self.transfers.iter().find(|t| t.id == task_id) {
+                    t.cancel();
+                }
+                ctx.notify();
+            }
+            SftpBrowserAction::DragFilesEnter => {
+                self.is_drag_hovering = true;
+                ctx.notify();
+            }
+            SftpBrowserAction::DragFilesLeave => {
+                self.is_drag_hovering = false;
+                ctx.notify();
+            }
             SftpBrowserAction::DragAndDropFiles(paths) => {
+                self.is_drag_hovering = false;
                 for local_path in paths {
                     let file_name = local_path
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_default();
-                    let remote_path =
-                        build_upload_remote_path(&self.current_path, &file_name);
+                    let remote_path = build_upload_remote_path(&self.current_path, &file_name);
+
+                    let total_size = std::fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0);
+
                     let task = TransferTask::new(
                         self.next_transfer_id,
                         local_path.clone(),
-                        remote_path,
+                        remote_path.clone(),
                         TransferDirection::Upload,
-                        0, // 大小在上传时确定
+                        total_size,
                     );
                     self.next_transfer_id += 1;
+                    let task_id = task.id;
                     self.transfers.push(task);
+
+                    if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id) {
+                        t.state = TransferState::InProgress;
+                    }
+
+                    if let Some(sftp) = &self.sftp {
+                        let sftp = sftp.clone();
+                        let transferred: std::sync::Arc<std::sync::atomic::AtomicU64> =
+                            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+                        let transferred_clone = transferred.clone();
+                        let task_id_for_cb = task_id;
+
+                        let progress_cb: sftp_ops::ProgressCallback =
+                            Box::new(move |bytes, _total| {
+                                transferred_clone.store(bytes, std::sync::atomic::Ordering::SeqCst);
+                            });
+
+                        let result = sftp_ops::upload_file_streaming(
+                            &sftp,
+                            &local_path,
+                            &remote_path,
+                            Some(&progress_cb),
+                        );
+
+                        if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id_for_cb)
+                        {
+                            match &result {
+                                Ok(()) => {
+                                    t.state = TransferState::Completed;
+                                    t.transferred = t.total_size;
+                                }
+                                Err(e) => {
+                                    t.state = TransferState::Failed(e.to_string());
+                                    t.transferred =
+                                        transferred.load(std::sync::atomic::Ordering::SeqCst);
+                                }
+                            }
+                        }
+
+                        if result.is_ok() {
+                            self.refresh_dir(ctx);
+                        } else if let Err(e) = &result {
+                            self.error_message = Some(format!("上传失败: {e}"));
+                        }
+                    }
                 }
                 ctx.notify();
             }
@@ -1120,27 +1186,127 @@ impl TypedActionView for SftpBrowserView {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
-                let remote_path =
-                    build_upload_remote_path(&self.current_path, &file_name);
+                let remote_path = build_upload_remote_path(&self.current_path, &file_name);
+
+                let total_size = std::fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0);
 
                 let task = TransferTask::new(
                     self.next_transfer_id,
                     local_path.clone(),
                     remote_path.clone(),
                     TransferDirection::Upload,
-                    0,
+                    total_size,
                 );
                 self.next_transfer_id += 1;
+                let task_id = task.id;
                 self.transfers.push(task);
+
+                // 设置传输状态为进行中
+                if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id) {
+                    t.state = TransferState::InProgress;
+                }
+                ctx.notify();
 
                 // 执行上传
                 if let Some(sftp) = &self.sftp {
-                    if let Err(e) =
-                        sftp_ops::upload_file_streaming(sftp, &local_path, &remote_path, None)
-                    {
-                        self.error_message = Some(format!("上传失败: {e}"));
-                    } else {
+                    let sftp = sftp.clone();
+                    let transferred: std::sync::Arc<std::sync::atomic::AtomicU64> =
+                        std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+                    let transferred_clone = transferred.clone();
+                    let task_id_for_cb = task_id;
+
+                    let progress_cb: sftp_ops::ProgressCallback = Box::new(move |bytes, _total| {
+                        transferred_clone.store(bytes, std::sync::atomic::Ordering::SeqCst);
+                    });
+
+                    let result = sftp_ops::upload_file_streaming(
+                        &sftp,
+                        &local_path,
+                        &remote_path,
+                        Some(&progress_cb),
+                    );
+
+                    // 更新传输任务状态
+                    if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id_for_cb) {
+                        match &result {
+                            Ok(()) => {
+                                t.state = TransferState::Completed;
+                                t.transferred = t.total_size;
+                            }
+                            Err(e) => {
+                                t.state = TransferState::Failed(e.to_string());
+                                t.transferred =
+                                    transferred.load(std::sync::atomic::Ordering::SeqCst);
+                            }
+                        }
+                    }
+
+                    if result.is_ok() {
                         self.refresh_dir(ctx);
+                    } else if let Err(e) = &result {
+                        self.error_message = Some(format!("上传失败: {e}"));
+                    }
+                }
+                ctx.notify();
+            }
+            SftpBrowserAction::DownloadSaveAs { index, local_path } => {
+                let local_path = PathBuf::from(local_path);
+                if let Some(entry) = self.entries.get(*index) {
+                    let task = TransferTask::new(
+                        self.next_transfer_id,
+                        entry.path.clone(),
+                        local_path.clone(),
+                        TransferDirection::Download,
+                        entry.size,
+                    );
+                    self.next_transfer_id += 1;
+                    let task_id = task.id;
+                    self.transfers.push(task);
+
+                    // 设置传输状态为进行中
+                    if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id) {
+                        t.state = TransferState::InProgress;
+                    }
+                    ctx.notify();
+
+                    if let Some(sftp) = &self.sftp {
+                        let sftp = sftp.clone();
+                        let transferred: std::sync::Arc<std::sync::atomic::AtomicU64> =
+                            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+                        let transferred_clone = transferred.clone();
+                        let task_id_for_cb = task_id;
+
+                        let progress_cb: sftp_ops::ProgressCallback =
+                            Box::new(move |bytes, _total| {
+                                transferred_clone.store(bytes, std::sync::atomic::Ordering::SeqCst);
+                            });
+
+                        let result = sftp_ops::download_file_streaming(
+                            &sftp,
+                            &entry.path,
+                            &local_path,
+                            Some(&progress_cb),
+                        );
+
+                        // 更新传输任务状态
+                        if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id_for_cb)
+                        {
+                            match &result {
+                                Ok(()) => {
+                                    t.state = TransferState::Completed;
+                                    t.transferred = t.total_size;
+                                }
+                                Err(e) => {
+                                    t.state = TransferState::Failed(e.to_string());
+                                    t.transferred =
+                                        transferred.load(std::sync::atomic::Ordering::SeqCst);
+                                }
+                            }
+                        }
+
+                        if let Err(e) = &result {
+                            self.error_message = Some(format!("下载失败: {e}"));
+                        }
                     }
                 }
                 ctx.notify();
@@ -1268,7 +1434,36 @@ impl View for SftpBrowserView {
                 .finish();
         }
 
-        main_content
+        // 10. 拖拽视觉反馈
+        if self.is_drag_hovering {
+            let drop_hint = Text::new_inline(
+                "拖放文件以上传".to_string(),
+                appearance.ui_font_family(),
+                appearance.ui_font_size() + 2.0,
+            )
+            .with_color(theme.accent().into())
+            .finish();
+            let overlay = Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_main_axis_alignment(MainAxisAlignment::Center)
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_child(drop_hint)
+                .finish();
+            let overlay_container = Container::new(overlay)
+                .with_background(theme.accent().with_opacity(20))
+                .with_border(Border::all(2.0).with_border_fill(theme.accent().into_solid()))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.0)))
+                .finish();
+            main_content = Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_child(main_content)
+                .with_child(overlay_container)
+                .finish();
+        }
+
+        // 11. 拖拽事件拦截
+        super::drop_target::SftpDropTargetElement::new(main_content).finish()
     }
 }
 
@@ -1342,4 +1537,167 @@ fn make_editor(
         editor.set_placeholder_text(&placeholder, ctx);
         editor
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    // ============================================================
+    // normalize_remote_path 测试
+    // ============================================================
+
+    /// 测试反斜杠替换为正斜杠
+    #[test]
+    fn test_normalize_remote_path_backslash() {
+        let path = PathBuf::from(r"home\user\docs");
+        let result = normalize_remote_path(&path);
+        assert_eq!(result, PathBuf::from("home/user/docs"));
+    }
+
+    /// 测试纯正斜杠路径不变
+    #[test]
+    fn test_normalize_remote_path_forward_slash() {
+        let path = PathBuf::from("/home/user/docs");
+        let result = normalize_remote_path(&path);
+        assert_eq!(result, PathBuf::from("/home/user/docs"));
+    }
+
+    /// 测试根路径
+    #[test]
+    fn test_normalize_remote_path_root() {
+        let path = PathBuf::from("/");
+        let result = normalize_remote_path(&path);
+        assert_eq!(result, PathBuf::from("/"));
+    }
+
+    /// 测试空路径
+    #[test]
+    fn test_normalize_remote_path_empty() {
+        let path = PathBuf::from("");
+        let result = normalize_remote_path(&path);
+        assert_eq!(result, PathBuf::from(""));
+    }
+
+    /// 测试混合斜杠路径
+    #[test]
+    fn test_normalize_remote_path_mixed() {
+        let path = PathBuf::from(r"home/user\docs/file.txt");
+        let result = normalize_remote_path(&path);
+        assert_eq!(result, PathBuf::from("home/user/docs/file.txt"));
+    }
+
+    // ============================================================
+    // build_rename_path 测试
+    // ============================================================
+
+    /// 测试重命名路径构建
+    #[test]
+    fn test_build_rename_path_basic() {
+        let original = PathBuf::from("/home/user/old.txt");
+        let result = build_rename_path(&original, "new.txt");
+        assert_eq!(result, PathBuf::from("/home/user/new.txt"));
+    }
+
+    /// 测试重命名路径无父目录
+    #[test]
+    fn test_build_rename_path_no_parent() {
+        let original = PathBuf::from("old.txt");
+        let result = build_rename_path(&original, "new.txt");
+        assert_eq!(result, PathBuf::from("new.txt"));
+    }
+
+    /// 测试重命名路径含反斜杠规范化
+    #[test]
+    fn test_build_rename_path_normalizes() {
+        let original = PathBuf::from("/home/user/old.txt");
+        let result = build_rename_path(&original, "new.txt");
+        assert!(!result.to_string_lossy().contains('\\'));
+    }
+
+    // ============================================================
+    // build_new_folder_path 测试
+    // ============================================================
+
+    /// 测试新建文件夹路径构建
+    #[test]
+    fn test_build_new_folder_path_basic() {
+        let parent = PathBuf::from("/home/user");
+        let result = build_new_folder_path(&parent, "new_dir");
+        assert_eq!(result, PathBuf::from("/home/user/new_dir"));
+    }
+
+    /// 测试新建文件夹路径含反斜杠规范化
+    #[test]
+    fn test_build_new_folder_path_normalizes() {
+        let parent = PathBuf::from("/home/user");
+        let result = build_new_folder_path(&parent, "test");
+        assert!(!result.to_string_lossy().contains('\\'));
+    }
+
+    // ============================================================
+    // build_upload_remote_path 测试
+    // ============================================================
+
+    /// 测试上传远程路径构建
+    #[test]
+    fn test_build_upload_remote_path_basic() {
+        let current = PathBuf::from("/home/user");
+        let result = build_upload_remote_path(&current, "upload.txt");
+        assert_eq!(result, PathBuf::from("/home/user/upload.txt"));
+    }
+
+    /// 测试上传远程路径含反斜杠规范化
+    #[test]
+    fn test_build_upload_remote_path_normalizes() {
+        let current = PathBuf::from("/home/user");
+        let result = build_upload_remote_path(&current, "file.txt");
+        assert!(!result.to_string_lossy().contains('\\'));
+    }
+
+    // ============================================================
+    // SftpBrowserAction 枚举测试
+    // ============================================================
+
+    /// 测试 SftpBrowserAction::CancelTransfer 变体
+    #[test]
+    fn test_action_cancel_transfer() {
+        let action = SftpBrowserAction::CancelTransfer(42);
+        assert!(matches!(action, SftpBrowserAction::CancelTransfer(42)));
+    }
+
+    /// 测试 SftpBrowserAction::ConfirmMove 变体
+    #[test]
+    fn test_action_confirm_move() {
+        let action = SftpBrowserAction::ConfirmMove;
+        assert!(matches!(action, SftpBrowserAction::ConfirmMove));
+    }
+
+    /// 测试 SftpBrowserAction::SetSearchFilter 变体
+    #[test]
+    fn test_action_set_search_filter() {
+        let action = SftpBrowserAction::SetSearchFilter("test".into());
+        assert!(matches!(action, SftpBrowserAction::SetSearchFilter(_)));
+    }
+
+    /// 测试 SftpBrowserAction::ClearSearchFilter 变体
+    #[test]
+    fn test_action_clear_search_filter() {
+        let action = SftpBrowserAction::ClearSearchFilter;
+        assert!(matches!(action, SftpBrowserAction::ClearSearchFilter));
+    }
+
+    /// 测试 SftpBrowserAction::DownloadSaveAs 变体
+    #[test]
+    fn test_action_download_save_as() {
+        let action = SftpBrowserAction::DownloadSaveAs {
+            index: 3,
+            local_path: "/tmp/file.txt".into(),
+        };
+        assert!(matches!(
+            action,
+            SftpBrowserAction::DownloadSaveAs { index: 3, .. }
+        ));
+    }
 }
