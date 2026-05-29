@@ -7,12 +7,12 @@
 use std::path::PathBuf;
 
 use warp_core::ui::appearance::Appearance;
+use warp_core::ui::icons::Icon;
 use warpui::elements::{
-    Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Flex,
-    Hoverable, MainAxisSize, MainAxisAlignment, ParentElement, Radius, Text,
+    Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Flex,
+    Hoverable, MainAxisSize, MainAxisAlignment, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
 };
 use warpui::platform::Cursor;
-use warpui::elements::MouseStateHandle;
 use warpui::Element;
 use warpui::ViewHandle;
 
@@ -20,8 +20,8 @@ use crate::editor::EditorView;
 use crate::sftp_manager::browser::SftpBrowserAction;
 use crate::sftp_manager::types::{format_size, Dialog, FileEntry};
 
-/// 对话框宽度
-const DIALOG_WIDTH: f32 = 360.0;
+/// 对话框最大宽度
+const DIALOG_MAX_WIDTH: f32 = 360.0;
 /// 对话框内边距
 const DIALOG_PADDING: f32 = 16.0;
 /// 按钮最小宽度
@@ -42,7 +42,58 @@ fn dialog_shell(content: Box<dyn Element>, appearance: &Appearance) -> Box<dyn E
         .finish()
 }
 
-/// 渲染按钮组件
+/// 渲染标题行（标题 + 关闭按钮）
+///
+/// 标题使用 Shrinkable 包裹以支持自适应宽度，右侧放置 X 关闭按钮。
+fn render_title_bar(title: &str, appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let text_color = theme.active_ui_text_color();
+    let ui_font = appearance.ui_font_family();
+    let ui_font_size = appearance.ui_font_size();
+
+    let title_el = Shrinkable::new(
+        1.0,
+        Text::new(title.to_string(), ui_font, ui_font_size)
+            .with_color(text_color.into())
+            .finish(),
+    )
+    .finish();
+
+    let close_btn = render_icon_close_button(appearance);
+
+    Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_child(title_el)
+        .with_child(close_btn)
+        .finish()
+}
+
+/// 渲染 X 图标关闭按钮
+fn render_icon_close_button(appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let icon_color = theme.sub_text_color(theme.background());
+    let icon_el = ConstrainedBox::new(Icon::X.to_warpui_icon(icon_color).finish())
+        .with_width(12.0)
+        .with_height(12.0)
+        .finish();
+    Hoverable::new(MouseStateHandle::default(), move |_| {
+        Container::new(icon_el)
+            .with_padding_left(4.0)
+            .with_padding_right(4.0)
+            .with_padding_top(4.0)
+            .with_padding_bottom(4.0)
+            .finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(|ctx, _, _| {
+        ctx.dispatch_typed_action(SftpBrowserAction::CloseDialog);
+    })
+    .finish()
+}
+
+/// 渲染操作按钮组件
 ///
 /// is_accent 为 true 时使用 accent 色背景，否则使用 surface_2 背景。
 fn render_button(
@@ -68,7 +119,7 @@ fn render_button(
     let label_owned = label.to_string();
 
     Hoverable::new(mouse_state, move |_| {
-        let text_el = Text::new_inline(label_owned.clone(), ui_font, ui_font_size)
+        let text_el = Text::new(label_owned.clone(), ui_font, ui_font_size)
             .with_color(text_color.into())
             .finish();
         let centered = Flex::row()
@@ -94,39 +145,19 @@ fn render_button(
     .finish()
 }
 
-/// 渲染关闭/取消按钮
-fn render_close_button(appearance: &Appearance, mouse_state: MouseStateHandle) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    let ui_font = appearance.ui_font_family();
-    let ui_font_size = appearance.ui_font_size();
-    let text_color = theme.active_ui_text_color();
-    let bg = theme.surface_2();
+/// 渲染取消按钮
+fn render_cancel_button(appearance: &Appearance, mouse_state: MouseStateHandle) -> Box<dyn Element> {
+    render_button("取消", false, appearance, SftpBrowserAction::CloseDialog, mouse_state)
+}
 
-    Hoverable::new(mouse_state, move |_| {
-        let text_el = Text::new_inline(String::from("取消"), ui_font, ui_font_size)
-            .with_color(text_color.into())
-            .finish();
-        let centered = Flex::row()
-            .with_main_axis_alignment(MainAxisAlignment::Center)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_child(text_el)
-            .finish();
-        Container::new(
-            ConstrainedBox::new(centered)
-                .with_width(BUTTON_MIN_WIDTH)
-                .with_height(BUTTON_HEIGHT)
-                .finish(),
-        )
-        .with_background(bg)
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+/// 将弹窗内容包裹在 Dismiss + 居中容器中
+fn wrap_dismiss(dialog_content: Box<dyn Element>) -> Box<dyn Element> {
+    Dismiss::new(dialog_content)
+        .prevent_interaction_with_other_elements()
+        .on_dismiss(|ctx, _| {
+            ctx.dispatch_typed_action(SftpBrowserAction::CloseDialog);
+        })
         .finish()
-    })
-    .with_cursor(Cursor::PointingHand)
-    .on_click(|ctx, _, _| {
-        ctx.dispatch_typed_action(SftpBrowserAction::CloseDialog);
-    })
-    .finish()
 }
 
 /// 渲染删除确认对话框
@@ -137,15 +168,12 @@ fn render_delete_confirm(
     cancel_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let text_color = theme.active_ui_text_color();
     let sub_color = theme.sub_text_color(theme.background());
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
 
-    // 标题
-    let title_el = Text::new_inline(String::from("确认删除"), ui_font, ui_font_size)
-        .with_color(text_color.into())
-        .finish();
+    // 标题行
+    let title_bar = render_title_bar("确认删除", appearance);
 
     // 描述
     let count = paths.len();
@@ -158,9 +186,13 @@ fn render_delete_confirm(
     } else {
         format!("确定要删除 {} 个项目吗？此操作不可撤销。", count)
     };
-    let desc_el = Text::new_inline(desc, ui_font, ui_font_size)
-        .with_color(sub_color.into())
-        .finish();
+    let desc_el = Shrinkable::new(
+        1.0,
+        Text::new(desc, ui_font, ui_font_size)
+            .with_color(sub_color.into())
+            .finish(),
+    )
+    .finish();
 
     // 按钮
     let delete_btn = render_button(
@@ -170,7 +202,7 @@ fn render_delete_confirm(
         SftpBrowserAction::ConfirmDelete,
         confirm_btn_state,
     );
-    let cancel_btn = render_close_button(appearance, cancel_btn_state);
+    let cancel_btn = render_cancel_button(appearance, cancel_btn_state);
 
     let buttons = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -183,21 +215,16 @@ fn render_delete_confirm(
     let content = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_spacing(12.0)
-        .with_child(title_el)
+        .with_child(title_bar)
         .with_child(desc_el)
         .with_child(buttons)
         .finish();
 
     let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
-        .with_width(DIALOG_WIDTH)
+        .with_max_width(DIALOG_MAX_WIDTH)
         .finish();
 
-    Dismiss::new(dialog_body)
-        .prevent_interaction_with_other_elements()
-        .on_dismiss(|ctx, _| {
-            ctx.dispatch_typed_action(SftpBrowserAction::CloseDialog);
-        })
-        .finish()
+    wrap_dismiss(dialog_body)
 }
 
 /// 渲染重命名对话框
@@ -209,31 +236,38 @@ fn render_rename(
     cancel_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let text_color = theme.active_ui_text_color();
     let sub_color = theme.sub_text_color(theme.background());
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
 
-    // 标题
-    let title_el = Text::new_inline(String::from("重命名"), ui_font, ui_font_size)
-        .with_color(text_color.into())
-        .finish();
+    // 标题行
+    let title_bar = render_title_bar("重命名", appearance);
 
     // 当前名称提示
     let hint = format!("当前名称: {}", original_name);
-    let hint_el = Text::new_inline(hint, ui_font, ui_font_size)
-        .with_color(sub_color.into())
-        .finish();
+    let hint_el = Shrinkable::new(
+        1.0,
+        Text::new(hint, ui_font, ui_font_size)
+            .with_color(sub_color.into())
+            .finish(),
+    )
+    .finish();
 
-    // 编辑器
-    let editor_el = Container::new(ChildView::new(editor).finish())
-        .with_padding_left(8.0)
-        .with_padding_right(8.0)
-        .with_padding_top(4.0)
-        .with_padding_bottom(4.0)
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-        .with_background(theme.surface_2())
-        .finish();
+    // 编辑器 — Shrinkable + Clipped 防止长文件名溢出
+    let editor_el = Container::new(
+        Shrinkable::new(
+            1.0,
+            Clipped::new(ChildView::new(editor).finish()).finish(),
+        )
+        .finish(),
+    )
+    .with_padding_left(8.0)
+    .with_padding_right(8.0)
+    .with_padding_top(4.0)
+    .with_padding_bottom(4.0)
+    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+    .with_background(theme.surface_2())
+    .finish();
 
     // 按钮
     let confirm_btn = render_button(
@@ -243,7 +277,7 @@ fn render_rename(
         SftpBrowserAction::ConfirmRename,
         confirm_btn_state,
     );
-    let cancel_btn = render_close_button(appearance, cancel_btn_state);
+    let cancel_btn = render_cancel_button(appearance, cancel_btn_state);
 
     let buttons = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -256,22 +290,17 @@ fn render_rename(
     let content = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_spacing(12.0)
-        .with_child(title_el)
+        .with_child(title_bar)
         .with_child(hint_el)
         .with_child(editor_el)
         .with_child(buttons)
         .finish();
 
     let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
-        .with_width(DIALOG_WIDTH)
+        .with_max_width(DIALOG_MAX_WIDTH)
         .finish();
 
-    Dismiss::new(dialog_body)
-        .prevent_interaction_with_other_elements()
-        .on_dismiss(|ctx, _| {
-            ctx.dispatch_typed_action(SftpBrowserAction::CloseDialog);
-        })
-        .finish()
+    wrap_dismiss(dialog_body)
 }
 
 /// 渲染新建文件夹对话框
@@ -282,24 +311,25 @@ fn render_create_folder(
     cancel_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let text_color = theme.active_ui_text_color();
-    let ui_font = appearance.ui_font_family();
-    let ui_font_size = appearance.ui_font_size();
 
-    // 标题
-    let title_el = Text::new_inline(String::from("新建文件夹"), ui_font, ui_font_size)
-        .with_color(text_color.into())
-        .finish();
+    // 标题行
+    let title_bar = render_title_bar("新建文件夹", appearance);
 
     // 编辑器
-    let editor_el = Container::new(ChildView::new(editor).finish())
-        .with_padding_left(8.0)
-        .with_padding_right(8.0)
-        .with_padding_top(4.0)
-        .with_padding_bottom(4.0)
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-        .with_background(theme.surface_2())
-        .finish();
+    let editor_el = Container::new(
+        Shrinkable::new(
+            1.0,
+            Clipped::new(ChildView::new(editor).finish()).finish(),
+        )
+        .finish(),
+    )
+    .with_padding_left(8.0)
+    .with_padding_right(8.0)
+    .with_padding_top(4.0)
+    .with_padding_bottom(4.0)
+    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+    .with_background(theme.surface_2())
+    .finish();
 
     // 按钮
     let confirm_btn = render_button(
@@ -309,7 +339,7 @@ fn render_create_folder(
         SftpBrowserAction::ConfirmNewFolder,
         confirm_btn_state,
     );
-    let cancel_btn = render_close_button(appearance, cancel_btn_state);
+    let cancel_btn = render_cancel_button(appearance, cancel_btn_state);
 
     let buttons = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -322,21 +352,16 @@ fn render_create_folder(
     let content = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_spacing(12.0)
-        .with_child(title_el)
+        .with_child(title_bar)
         .with_child(editor_el)
         .with_child(buttons)
         .finish();
 
     let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
-        .with_width(DIALOG_WIDTH)
+        .with_max_width(DIALOG_MAX_WIDTH)
         .finish();
 
-    Dismiss::new(dialog_body)
-        .prevent_interaction_with_other_elements()
-        .on_dismiss(|ctx, _| {
-            ctx.dispatch_typed_action(SftpBrowserAction::CloseDialog);
-        })
-        .finish()
+    wrap_dismiss(dialog_body)
 }
 
 /// 渲染单个属性行（标签 + 值）
@@ -348,16 +373,20 @@ fn detail_row(label: &str, value: &str, appearance: &Appearance) -> Box<dyn Elem
     let ui_font_size = appearance.ui_font_size();
 
     let label_el = ConstrainedBox::new(
-        Text::new_inline(label.to_string(), ui_font, ui_font_size)
+        Text::new(label.to_string(), ui_font, ui_font_size)
             .with_color(sub_color.into())
             .finish(),
     )
     .with_width(80.0)
     .finish();
 
-    let value_el = Text::new_inline(value.to_string(), ui_font, ui_font_size)
-        .with_color(text_color.into())
-        .finish();
+    let value_el = Shrinkable::new(
+        1.0,
+        Text::new(value.to_string(), ui_font, ui_font_size)
+            .with_color(text_color.into())
+            .finish(),
+    )
+    .finish();
 
     Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -373,15 +402,8 @@ fn render_file_details(
     appearance: &Appearance,
     cancel_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    let text_color = theme.active_ui_text_color();
-    let ui_font = appearance.ui_font_family();
-    let ui_font_size = appearance.ui_font_size();
-
-    // 标题
-    let title_el = Text::new_inline(String::from("文件详情"), ui_font, ui_font_size)
-        .with_color(text_color.into())
-        .finish();
+    // 标题行
+    let title_bar = render_title_bar("文件详情", appearance);
 
     // 类型
     let type_str = match entry.file_type {
@@ -405,26 +427,21 @@ fn render_file_details(
     rows.add_child(detail_row("路径", &entry.path.display().to_string(), appearance));
 
     // 关闭按钮
-    let close_btn = render_close_button(appearance, cancel_btn_state);
+    let close_btn = render_cancel_button(appearance, cancel_btn_state);
 
     let content = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_spacing(12.0)
-        .with_child(title_el)
-        .with_child(rows.finish())
+        .with_child(title_bar)
+        .with_child(ConstrainedBox::new(rows.finish()).with_max_height(250.0).finish())
         .with_child(close_btn)
         .finish();
 
     let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
-        .with_width(DIALOG_WIDTH)
+        .with_max_width(DIALOG_MAX_WIDTH)
         .finish();
 
-    Dismiss::new(dialog_body)
-        .prevent_interaction_with_other_elements()
-        .on_dismiss(|ctx, _| {
-            ctx.dispatch_typed_action(SftpBrowserAction::CloseDialog);
-        })
-        .finish()
+    wrap_dismiss(dialog_body)
 }
 
 /// 渲染移动对话框
@@ -436,14 +453,12 @@ fn render_move_dialog(
     cancel_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let text_color = theme.active_ui_text_color();
     let sub_color = theme.sub_text_color(theme.background());
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
 
-    let title_el = Text::new_inline(String::from("移动文件"), ui_font, ui_font_size)
-        .with_color(text_color.into())
-        .finish();
+    // 标题行
+    let title_bar = render_title_bar("移动文件", appearance);
 
     let source_name = source
         .file_name()
@@ -454,9 +469,13 @@ fn render_move_dialog(
         source_name,
         target_dir.display()
     );
-    let desc_el = Text::new_inline(desc, ui_font, ui_font_size)
-        .with_color(sub_color.into())
-        .finish();
+    let desc_el = Shrinkable::new(
+        1.0,
+        Text::new(desc, ui_font, ui_font_size)
+            .with_color(sub_color.into())
+            .finish(),
+    )
+    .finish();
 
     let confirm_btn = render_button(
         "移动",
@@ -465,7 +484,7 @@ fn render_move_dialog(
         SftpBrowserAction::ConfirmMove,
         confirm_btn_state,
     );
-    let cancel_btn = render_close_button(appearance, cancel_btn_state);
+    let cancel_btn = render_cancel_button(appearance, cancel_btn_state);
 
     let buttons = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -478,21 +497,16 @@ fn render_move_dialog(
     let content = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_spacing(12.0)
-        .with_child(title_el)
+        .with_child(title_bar)
         .with_child(desc_el)
         .with_child(buttons)
         .finish();
 
     let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
-        .with_width(DIALOG_WIDTH)
+        .with_max_width(DIALOG_MAX_WIDTH)
         .finish();
 
-    Dismiss::new(dialog_body)
-        .prevent_interaction_with_other_elements()
-        .on_dismiss(|ctx, _| {
-            ctx.dispatch_typed_action(SftpBrowserAction::CloseDialog);
-        })
-        .finish()
+    wrap_dismiss(dialog_body)
 }
 
 /// 渲染覆盖确认对话框
@@ -504,23 +518,25 @@ fn render_overwrite_confirm(
     cancel_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let text_color = theme.active_ui_text_color();
     let sub_color = theme.sub_text_color(theme.background());
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
 
-    let title_el = Text::new_inline(String::from("确认覆盖"), ui_font, ui_font_size)
-        .with_color(text_color.into())
-        .finish();
+    // 标题行
+    let title_bar = render_title_bar("确认覆盖", appearance);
 
     let target_name = target
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
     let desc = format!("目标文件 {} 已存在，是否覆盖？", target_name);
-    let desc_el = Text::new_inline(desc, ui_font, ui_font_size)
-        .with_color(sub_color.into())
-        .finish();
+    let desc_el = Shrinkable::new(
+        1.0,
+        Text::new(desc, ui_font, ui_font_size)
+            .with_color(sub_color.into())
+            .finish(),
+    )
+    .finish();
 
     let confirm_btn = render_button(
         "覆盖",
@@ -529,7 +545,7 @@ fn render_overwrite_confirm(
         SftpBrowserAction::ConfirmOverwrite,
         confirm_btn_state,
     );
-    let cancel_btn = render_close_button(appearance, cancel_btn_state);
+    let cancel_btn = render_cancel_button(appearance, cancel_btn_state);
 
     let buttons = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -542,21 +558,16 @@ fn render_overwrite_confirm(
     let content = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_spacing(12.0)
-        .with_child(title_el)
+        .with_child(title_bar)
         .with_child(desc_el)
         .with_child(buttons)
         .finish();
 
     let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
-        .with_width(DIALOG_WIDTH)
+        .with_max_width(DIALOG_MAX_WIDTH)
         .finish();
 
-    Dismiss::new(dialog_body)
-        .prevent_interaction_with_other_elements()
-        .on_dismiss(|ctx, _| {
-            ctx.dispatch_typed_action(SftpBrowserAction::CloseDialog);
-        })
-        .finish()
+    wrap_dismiss(dialog_body)
 }
 
 /// 渲染对话框（主入口函数）

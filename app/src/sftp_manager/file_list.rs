@@ -129,6 +129,17 @@ pub fn render_file_row(
     .on_double_click(move |ctx, _, _| {
         ctx.dispatch_typed_action(SftpBrowserAction::OpenEntry(index));
     })
+    .on_right_click(move |ctx, _, position| {
+        use super::browser::SFTP_PANEL_POSITION_ID;
+        let offset = match ctx.element_position_by_id(SFTP_PANEL_POSITION_ID) {
+            Some(bounds) => position - bounds.origin(),
+            None => position,
+        };
+        ctx.dispatch_typed_action(SftpBrowserAction::ContextMenu {
+            index,
+            position: offset,
+        });
+    })
     .finish()
 }
 

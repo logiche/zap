@@ -18,9 +18,12 @@ use super::browser::{SftpBrowserAction, SftpBrowserView};
 
 /// 初始化测试所需的最小单例集合
 fn initialize_app(app: &mut warpui::App) {
+    use crate::workspace::ToastStack;
+
     initialize_settings_for_tests(app);
     app.add_singleton_model(|_| Appearance::mock());
     app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
+    app.add_singleton_model(|_| ToastStack);
 
     // SSH 管理器需要一个 SQLite 路径；使用临时文件，查询失败不 panic
     let temp_db = std::env::temp_dir().join("warp_sftp_test.sqlite");
@@ -252,6 +255,420 @@ fn test_initial_state() {
             assert!(view.transfers.is_empty(), "初始传输列表应为空");
             assert!(view.search_filter.is_none(), "初始搜索过滤应为 None");
             assert!(!view.is_drag_hovering, "初始拖拽悬停应为 false");
+        });
+    });
+}
+
+// ============================================================
+// 右键菜单测试
+// ============================================================
+
+/// 验证 ContextMenu action 设置 context_menu 状态并选中条目
+#[test]
+fn test_context_menu_sets_state() {
+    use pathfinder_geometry::vector::Vector2F;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        let position = Vector2F::new(100.0, 200.0);
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::ContextMenu {
+                    index: 3,
+                    position,
+                },
+                ctx,
+            );
+        });
+
+        view.read(&app, |view, _| {
+            assert!(
+                view.context_menu.is_some(),
+                "ContextMenu 后 context_menu 应为 Some"
+            );
+            let cm = view.context_menu.as_ref().unwrap();
+            assert_eq!(cm.entry_index, 3, "entry_index 应为 3");
+            assert_eq!(cm.position, position, "position 应与传入值一致");
+            assert!(
+                view.selected.contains(&3),
+                "ContextMenu 后应选中索引 3"
+            );
+        });
+    });
+}
+
+/// 验证 CloseContextMenu 清除 context_menu 状态
+#[test]
+fn test_close_context_menu_clears_state() {
+    use pathfinder_geometry::vector::Vector2F;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        // 先打开右键菜单
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::ContextMenu {
+                    index: 1,
+                    position: Vector2F::new(50.0, 50.0),
+                },
+                ctx,
+            );
+        });
+        view.read(&app, |view, _| {
+            assert!(view.context_menu.is_some(), "应已打开菜单");
+        });
+
+        // 关闭菜单
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CloseContextMenu, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(
+                view.context_menu.is_none(),
+                "CloseContextMenu 后 context_menu 应为 None"
+            );
+        });
+    });
+}
+
+/// 验证 ContextMenu 会替换之前的菜单状态
+#[test]
+fn test_context_menu_replaces_previous() {
+    use pathfinder_geometry::vector::Vector2F;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        // 打开第一个菜单
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::ContextMenu {
+                    index: 0,
+                    position: Vector2F::new(10.0, 10.0),
+                },
+                ctx,
+            );
+        });
+
+        // 打开第二个菜单（不同位置和索引）
+        let new_position = Vector2F::new(300.0, 400.0);
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::ContextMenu {
+                    index: 5,
+                    position: new_position,
+                },
+                ctx,
+            );
+        });
+
+        view.read(&app, |view, _| {
+            let cm = view.context_menu.as_ref().unwrap();
+            assert_eq!(cm.entry_index, 5, "应更新为新的 entry_index");
+            assert_eq!(
+                cm.position, new_position,
+                "应更新为新的 position"
+            );
+            assert!(
+                view.selected.contains(&5),
+                "应选中新索引 5"
+            );
+            assert!(
+                !view.selected.contains(&0),
+                "应取消选中旧索引 0"
+            );
+        });
+    });
+}
+
+// ============================================================
+// 右键菜单边界条件测试
+// ============================================================
+
+/// 验证 ContextMenu index=0 时正确处理
+#[test]
+fn test_context_menu_zero_index() {
+    use pathfinder_geometry::vector::Vector2F;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        let position = Vector2F::new(0.0, 0.0);
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::ContextMenu {
+                    index: 0,
+                    position,
+                },
+                ctx,
+            );
+        });
+
+        view.read(&app, |view, _| {
+            let cm = view.context_menu.as_ref().unwrap();
+            assert_eq!(cm.entry_index, 0, "index=0 应正确保存");
+            assert_eq!(cm.position, position, "position 应正确保存");
+            assert!(view.selected.contains(&0), "应选中索引 0");
+        });
+    });
+}
+
+/// 验证 ContextMenu 大索引值不 panic
+#[test]
+fn test_context_menu_large_index() {
+    use pathfinder_geometry::vector::Vector2F;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        let position = Vector2F::new(500.0, 600.0);
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::ContextMenu {
+                    index: 999,
+                    position,
+                },
+                ctx,
+            );
+        });
+
+        view.read(&app, |view, _| {
+            let cm = view.context_menu.as_ref().unwrap();
+            assert_eq!(cm.entry_index, 999, "大索引应正确保存");
+            assert!(view.selected.contains(&999), "应选中大索引");
+        });
+    });
+}
+
+/// 验证 ContextMenu 负坐标正确处理
+#[test]
+fn test_context_menu_negative_position() {
+    use pathfinder_geometry::vector::Vector2F;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        let position = Vector2F::new(-50.0, -100.0);
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::ContextMenu {
+                    index: 1,
+                    position,
+                },
+                ctx,
+            );
+        });
+
+        view.read(&app, |view, _| {
+            let cm = view.context_menu.as_ref().unwrap();
+            assert_eq!(cm.position, position, "负坐标应正确保存");
+        });
+    });
+}
+
+/// 验证 CloseContextMenu 在没有菜单打开时不 panic
+#[test]
+fn test_close_context_menu_when_none() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        // 初始状态没有菜单
+        view.read(&app, |view, _| {
+            assert!(view.context_menu.is_none(), "初始应无菜单");
+        });
+
+        // 直接关闭不应 panic
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CloseContextMenu, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(
+                view.context_menu.is_none(),
+                "关闭后仍应为 None"
+            );
+        });
+    });
+}
+
+/// 验证 ContextMenu 清除之前的选择并选中新条目
+#[test]
+fn test_context_menu_clears_previous_selection() {
+    use pathfinder_geometry::vector::Vector2F;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        // 先选中条目 2 和 3（通过两次 SelectEntry）
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::SelectEntry(2), ctx);
+        });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::SelectEntry(3), ctx);
+        });
+        view.read(&app, |view, _| {
+            assert!(view.selected.contains(&3), "应选中 3");
+            assert!(!view.selected.contains(&2), "单选模式应清除 2");
+        });
+
+        // 右键点击条目 7
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::ContextMenu {
+                    index: 7,
+                    position: Vector2F::new(200.0, 300.0),
+                },
+                ctx,
+            );
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.selected.contains(&7), "应选中 7");
+            assert!(!view.selected.contains(&3), "应清除旧选择 3");
+            assert_eq!(view.selected.len(), 1, "应只有一个选中项");
+        });
+    });
+}
+
+/// 验证多次打开关闭菜单不泄漏状态
+#[test]
+fn test_context_menu_multiple_open_close_cycles() {
+    use pathfinder_geometry::vector::Vector2F;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        for i in 0..5 {
+            // 打开菜单
+            view.update(&mut app, |view, ctx| {
+                view.handle_action(
+                    &SftpBrowserAction::ContextMenu {
+                        index: i,
+                        position: Vector2F::new(i as f32 * 10.0, i as f32 * 20.0),
+                    },
+                    ctx,
+                );
+            });
+            view.read(&app, |view, _| {
+                assert!(view.context_menu.is_some(), "第 {i} 次打开应成功");
+            });
+
+            // 关闭菜单
+            view.update(&mut app, |view, ctx| {
+                view.handle_action(&SftpBrowserAction::CloseContextMenu, ctx);
+            });
+            view.read(&app, |view, _| {
+                assert!(
+                    view.context_menu.is_none(),
+                    "第 {i} 次关闭后应为 None"
+                );
+            });
+        }
+    });
+}
+
+// ============================================================
+// 菜单项动作测试
+// ============================================================
+
+/// 验证 SftpBrowserAction::DetailsEntry 变体正确构造
+#[test]
+fn test_action_details_entry() {
+    let action = SftpBrowserAction::DetailsEntry(42);
+    assert!(matches!(action, SftpBrowserAction::DetailsEntry(42)));
+}
+
+/// 验证 SftpBrowserAction::DeleteEntry 变体正确构造
+#[test]
+fn test_action_delete_entry() {
+    let action = SftpBrowserAction::DeleteEntry(10);
+    assert!(matches!(action, SftpBrowserAction::DeleteEntry(10)));
+}
+
+/// 验证 SftpBrowserAction::RenameEntry 变体正确构造
+#[test]
+fn test_action_rename_entry() {
+    let action = SftpBrowserAction::RenameEntry(5);
+    assert!(matches!(action, SftpBrowserAction::RenameEntry(5)));
+}
+
+/// 验证 SftpBrowserAction::DownloadEntry 变体正确构造
+#[test]
+fn test_action_download_entry() {
+    let action = SftpBrowserAction::DownloadEntry(3);
+    assert!(matches!(action, SftpBrowserAction::DownloadEntry(3)));
+}
+
+/// 验证 SftpBrowserAction::OpenEntry 变体正确构造
+#[test]
+fn test_action_open_entry() {
+    let action = SftpBrowserAction::OpenEntry(1);
+    assert!(matches!(action, SftpBrowserAction::OpenEntry(1)));
+}
+
+/// 验证 SftpBrowserAction::ContextMenu 变体正确构造
+#[test]
+fn test_action_context_menu_variant() {
+    use pathfinder_geometry::vector::Vector2F;
+    let action = SftpBrowserAction::ContextMenu {
+        index: 3,
+        position: Vector2F::new(100.0, 200.0),
+    };
+    assert!(matches!(
+        action,
+        SftpBrowserAction::ContextMenu {
+            index: 3,
+            ..
+        }
+    ));
+}
+
+/// 验证 SftpBrowserAction::CloseContextMenu 变体正确构造
+#[test]
+fn test_action_close_context_menu_variant() {
+    let action = SftpBrowserAction::CloseContextMenu;
+    assert!(matches!(action, SftpBrowserAction::CloseContextMenu));
+}
+
+// ============================================================
+// DeleteEntry 动作处理测试
+// ============================================================
+
+/// 验证 DeleteEntry 在无 SFTP 连接时不 panic
+#[test]
+fn test_delete_entry_no_connection() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        // 无 SFTP 连接时执行 DeleteEntry 不应 panic
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::DeleteEntry(0), ctx);
+        });
+    });
+}
+
+/// 验证 RenameEntry 在无 SFTP 连接时不 panic
+#[test]
+fn test_rename_entry_no_connection() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::RenameEntry(0), ctx);
         });
     });
 }

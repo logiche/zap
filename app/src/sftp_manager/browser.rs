@@ -8,13 +8,16 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warp_ssh_manager::{KeychainSecretStore, SshRepository};
 use warpui::elements::{
-    Align, Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
-    Container, CornerRadius, CrossAxisAlignment, Element, Fill, Flex, Hoverable, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Shrinkable, Stack, Text,
+    Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Fill, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Shrinkable, Stack,
+    Text,
 };
 use warpui::platform::{Cursor, FilePickerConfiguration, SaveFilePickerConfiguration};
 use warpui::{
@@ -46,6 +49,8 @@ const TOOLBAR_ICON_SIZE: f32 = 16.0;
 const TOOLBAR_SPACING: f32 = 4.0;
 /// 面板内边距
 const PANEL_PADDING: f32 = 8.0;
+/// SFTP 面板位置 ID（用于 SavePosition 定位右键菜单）
+pub(crate) const SFTP_PANEL_POSITION_ID: &str = "sftp_browser_panel_root";
 
 /// SFTP 浏览器动作
 #[derive(Debug, Clone)]
@@ -83,7 +88,10 @@ pub enum SftpBrowserAction {
     /// 确认覆盖
     ConfirmOverwrite,
     /// 弹出右键菜单
-    ContextMenu(usize),
+    ContextMenu {
+        index: usize,
+        position: Vector2F,
+    },
     /// 关闭右键菜单
     CloseContextMenu,
     /// 关闭对话框
@@ -153,7 +161,7 @@ pub struct SftpBrowserView {
     /// 是否正在加载
     is_loading: bool,
     /// 右键菜单状态
-    context_menu: Option<ContextMenuState>,
+    pub(crate) context_menu: Option<ContextMenuState>,
     /// 搜索过滤文本
     pub(crate) search_filter: Option<String>,
     /// 是否有文件拖拽悬停在浏览器上
@@ -1024,9 +1032,10 @@ impl TypedActionView for SftpBrowserView {
                 self.dialog = None;
                 ctx.notify();
             }
-            SftpBrowserAction::ContextMenu(index) => {
+            SftpBrowserAction::ContextMenu { index, position } => {
                 let index = *index;
-                self.context_menu = Some(ContextMenuState::new(index, (0.0, 0.0)));
+                let position = *position;
+                self.context_menu = Some(ContextMenuState::new(index, position));
                 self.selected.clear();
                 self.selected.insert(index);
                 ctx.notify();
@@ -1387,13 +1396,19 @@ impl View for SftpBrowserView {
         let mut main_content = col.finish();
         if let Some(ref cm_state) = self.context_menu {
             let menu_el = super::context_menu::render_context_menu(cm_state, appearance);
+            let positioning = OffsetPositioning::offset_from_parent(
+                cm_state.position,
+                ParentOffsetBounds::ParentByPosition,
+                ParentAnchor::TopLeft,
+                ChildAnchor::TopLeft,
+            );
             let mut stack = Stack::new();
             stack.add_child(main_content);
-            stack.add_overlay_child(menu_el);
+            stack.add_positioned_overlay_child(menu_el, positioning);
             main_content = stack.finish();
         }
 
-        // 9. 对话框（覆盖层）
+            // 9. 对话框（覆盖层）
         if let Some(ref dialog) = self.dialog {
             let dialog_el = super::dialogs::render_dialog(
                 dialog,
@@ -1403,9 +1418,15 @@ impl View for SftpBrowserView {
                 self.dialog_confirm_btn.clone(),
                 self.dialog_cancel_btn.clone(),
             );
+            let centered_dialog = Flex::column()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::Center)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(dialog_el)
+                .finish();
             let mut stack = Stack::new();
             stack.add_child(main_content);
-            stack.add_overlay_child(dialog_el);
+            stack.add_overlay_child(centered_dialog);
             main_content = stack.finish();
         }
 
@@ -1435,8 +1456,12 @@ impl View for SftpBrowserView {
             main_content = stack.finish();
         }
 
-        // 11. 拖拽事件拦截
-        super::drop_target::SftpDropTargetElement::new(main_content).finish()
+        // 11. 保存面板位置（用于右键菜单位置计算）
+        let positioned_content =
+            SavePosition::new(main_content, SFTP_PANEL_POSITION_ID).finish();
+
+        // 12. 拖拽事件拦截
+        super::drop_target::SftpDropTargetElement::new(positioned_content).finish()
     }
 }
 
