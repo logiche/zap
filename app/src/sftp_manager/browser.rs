@@ -14,7 +14,7 @@ use warp_ssh_manager::{KeychainSecretStore, SshRepository};
 use warpui::elements::{
     Align, Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
     Container, CornerRadius, CrossAxisAlignment, Element, Fill, Flex, Hoverable, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Shrinkable, Text,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Shrinkable, Stack, Text,
 };
 use warpui::platform::{Cursor, FilePickerConfiguration, SaveFilePickerConfiguration};
 use warpui::{
@@ -28,6 +28,8 @@ use crate::editor::{
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
 
 use super::context_menu::ContextMenuState;
 use super::sftp_ops;
@@ -148,8 +150,6 @@ pub struct SftpBrowserView {
     // ---- UI 状态 ----
     /// 当前打开的对话框
     dialog: Option<Dialog>,
-    /// 错误消息
-    pub(crate) error_message: Option<String>,
     /// 是否正在加载
     is_loading: bool,
     /// 右键菜单状态
@@ -171,6 +171,10 @@ pub struct SftpBrowserView {
     upload_btn: MouseStateHandle,
     /// 新建文件夹按钮
     new_folder_btn: MouseStateHandle,
+    /// 对话框确认按钮
+    dialog_confirm_btn: MouseStateHandle,
+    /// 对话框取消按钮
+    dialog_cancel_btn: MouseStateHandle,
     // ---- 对话框编辑器 ----
     /// 重命名编辑器
     rename_editor: ViewHandle<EditorView>,
@@ -209,7 +213,6 @@ impl SftpBrowserView {
             transfers: Vec::new(),
             next_transfer_id: 1,
             dialog: None,
-            error_message: None,
             is_loading: false,
             context_menu: None,
             search_filter: None,
@@ -220,6 +223,8 @@ impl SftpBrowserView {
             forward_btn: MouseStateHandle::default(),
             upload_btn: MouseStateHandle::default(),
             new_folder_btn: MouseStateHandle::default(),
+            dialog_confirm_btn: MouseStateHandle::default(),
+            dialog_cancel_btn: MouseStateHandle::default(),
             rename_editor,
             new_folder_editor,
             search_editor,
@@ -331,7 +336,7 @@ impl SftpBrowserView {
                                 self.connection =
                                     ConnectionState::Failed(format!("创建 SFTP 通道失败: {e}"));
                                 self.is_loading = false;
-                                self.error_message = Some(format!("创建 SFTP 通道失败: {e}"));
+                                self.show_error_toast(format!("创建 SFTP 通道失败: {e}"), ctx);
                                 ctx.notify();
                             }
                         }
@@ -339,19 +344,19 @@ impl SftpBrowserView {
                     Err(e) => {
                         self.connection = ConnectionState::Failed(e.to_string());
                         self.is_loading = false;
-                        self.error_message = Some(e.to_string());
+                        self.show_error_toast(e.to_string(), ctx);
                         ctx.notify();
                     }
                 }
             }
             Ok(None) => {
                 self.connection = ConnectionState::Failed("未找到服务器配置".to_string());
-                self.error_message = Some("未找到服务器配置".to_string());
+                self.show_error_toast("未找到服务器配置".to_string(), ctx);
                 ctx.notify();
             }
             Err(e) => {
                 self.connection = ConnectionState::Failed(format!("读取服务器配置失败: {e}"));
-                self.error_message = Some(format!("读取服务器配置失败: {e}"));
+                self.show_error_toast(format!("读取服务器配置失败: {e}"), ctx);
                 ctx.notify();
             }
         }
@@ -362,14 +367,13 @@ impl SftpBrowserView {
         let sftp = match &self.sftp {
             Some(s) => s.clone(),
             None => {
-                self.error_message = Some("未连接到服务器".to_string());
+                self.show_error_toast("未连接到服务器".to_string(), ctx);
                 ctx.notify();
                 return;
             }
         };
 
         self.is_loading = true;
-        self.error_message = None;
         ctx.notify();
 
         let path = self.current_path.clone();
@@ -392,7 +396,7 @@ impl SftpBrowserView {
                 ctx.notify();
             }
             Err(e) => {
-                self.error_message = Some(format!("列出目录失败: {e}"));
+                self.show_error_toast(format!("列出目录失败: {e}"), ctx);
                 self.is_loading = false;
                 ctx.notify();
             }
@@ -411,6 +415,16 @@ impl SftpBrowserView {
             self.row_mouse_handles.push(MouseStateHandle::default());
         }
         self.row_mouse_handles.truncate(self.entries.len());
+    }
+
+    /// 显示错误 Toast 弹窗
+    fn show_error_toast(&self, message: String, ctx: &mut ViewContext<Self>) {
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            let toast = DismissibleToast::error(message)
+                .with_object_id("sftp_error".to_string());
+            toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+        });
     }
 
     /// 导航到指定路径并更新历史记录
@@ -491,7 +505,7 @@ impl SftpBrowserView {
         let sftp = match &self.sftp {
             Some(s) => s.clone(),
             None => {
-                self.error_message = Some("未连接到服务器".to_string());
+                self.show_error_toast("未连接到服务器".to_string(), ctx);
                 self.dialog = None;
                 ctx.notify();
                 return;
@@ -518,7 +532,7 @@ impl SftpBrowserView {
                 sftp_ops::delete_file(&sftp, path)
             };
             if let Err(e) = result {
-                self.error_message = Some(format!("删除失败: {e}"));
+                self.show_error_toast(format!("删除失败: {e}"), ctx);
                 break;
             }
         }
@@ -738,26 +752,7 @@ impl SftpBrowserView {
         Align::new(Container::new(content).with_uniform_padding(24.0).finish()).finish()
     }
 
-    /// 渲染错误消息
-    fn render_error(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
-        let err = self.error_message.as_ref()?;
-        let theme = appearance.theme();
 
-        let text_el = Text::new_inline(
-            err.clone(),
-            appearance.ui_font_family(),
-            appearance.ui_font_size(),
-        )
-        .with_color(theme.ui_error_color())
-        .finish();
-
-        Some(
-            Container::new(text_el)
-                .with_uniform_padding(8.0)
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-                .finish(),
-        )
-    }
 
     /// 渲染文件列表
     fn render_file_list(&self, appearance: &Appearance) -> Box<dyn Element> {
@@ -983,8 +978,7 @@ impl TypedActionView for SftpBrowserView {
                     let new_name = self.rename_editor.as_ref(ctx).buffer_text(ctx);
                     let new_name = new_name.trim().to_string();
                     if new_name.is_empty() {
-                        self.error_message = Some("名称不能为空".to_string());
-                        ctx.notify();
+                        self.show_error_toast("名称不能为空".to_string(), ctx);
                         return;
                     }
                     let new_path = build_rename_path(original_path, &new_name);
@@ -993,12 +987,10 @@ impl TypedActionView for SftpBrowserView {
                         match sftp_ops::rename(sftp, original_path, &new_path) {
                             Ok(()) => {
                                 self.dialog = None;
-                                self.error_message = None;
                                 self.refresh_dir(ctx);
                             }
                             Err(e) => {
-                                self.error_message = Some(format!("重命名失败: {e}"));
-                                ctx.notify();
+                                self.show_error_toast(format!("重命名失败: {e}"), ctx);
                             }
                         }
                     }
@@ -1009,8 +1001,7 @@ impl TypedActionView for SftpBrowserView {
                     let folder_name = self.new_folder_editor.as_ref(ctx).buffer_text(ctx);
                     let folder_name = folder_name.trim().to_string();
                     if folder_name.is_empty() {
-                        self.error_message = Some("文件夹名称不能为空".to_string());
-                        ctx.notify();
+                        self.show_error_toast("文件夹名称不能为空".to_string(), ctx);
                         return;
                     }
                     let folder_path = build_new_folder_path(parent_path, &folder_name);
@@ -1019,12 +1010,10 @@ impl TypedActionView for SftpBrowserView {
                         match sftp_ops::create_dir(sftp, &folder_path) {
                             Ok(()) => {
                                 self.dialog = None;
-                                self.error_message = None;
                                 self.refresh_dir(ctx);
                             }
                             Err(e) => {
-                                self.error_message = Some(format!("创建文件夹失败: {e}"));
-                                ctx.notify();
+                                self.show_error_toast(format!("创建文件夹失败: {e}"), ctx);
                             }
                         }
                     }
@@ -1085,12 +1074,10 @@ impl TypedActionView for SftpBrowserView {
                         match sftp_ops::rename(sftp, source, &target_path) {
                             Ok(()) => {
                                 self.dialog = None;
-                                self.error_message = None;
                                 self.refresh_dir(ctx);
                             }
                             Err(e) => {
-                                self.error_message = Some(format!("移动失败: {e}"));
-                                ctx.notify();
+                                self.show_error_toast(format!("移动失败: {e}"), ctx);
                             }
                         }
                     }
@@ -1174,7 +1161,7 @@ impl TypedActionView for SftpBrowserView {
                         if result.is_ok() {
                             self.refresh_dir(ctx);
                         } else if let Err(e) = &result {
-                            self.error_message = Some(format!("上传失败: {e}"));
+                            self.show_error_toast(format!("上传失败: {e}"), ctx);
                         }
                     }
                 }
@@ -1244,7 +1231,7 @@ impl TypedActionView for SftpBrowserView {
                     if result.is_ok() {
                         self.refresh_dir(ctx);
                     } else if let Err(e) = &result {
-                        self.error_message = Some(format!("上传失败: {e}"));
+                        self.show_error_toast(format!("上传失败: {e}"), ctx);
                     }
                 }
                 ctx.notify();
@@ -1305,7 +1292,7 @@ impl TypedActionView for SftpBrowserView {
                         }
 
                         if let Err(e) = &result {
-                            self.error_message = Some(format!("下载失败: {e}"));
+                            self.show_error_toast(format!("下载失败: {e}"), ctx);
                         }
                     }
                 }
@@ -1366,17 +1353,7 @@ impl View for SftpBrowserView {
                 .finish(),
         );
 
-        // 5. 错误消息
-        if let Some(error_el) = self.render_error(appearance) {
-            col.add_child(
-                Container::new(error_el)
-                    .with_padding_left(PANEL_PADDING)
-                    .with_padding_right(PANEL_PADDING)
-                    .finish(),
-            );
-        }
-
-        // 6. 加载中 / 文件列表
+        // 5. 加载中 / 文件列表
         if self.is_loading {
             col.add_child(Shrinkable::new(1.0, self.render_loading(appearance)).finish());
         } else {
@@ -1410,12 +1387,10 @@ impl View for SftpBrowserView {
         let mut main_content = col.finish();
         if let Some(ref cm_state) = self.context_menu {
             let menu_el = super::context_menu::render_context_menu(cm_state, appearance);
-            main_content = Flex::column()
-                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_child(main_content)
-                .with_child(menu_el)
-                .finish();
+            let mut stack = Stack::new();
+            stack.add_child(main_content);
+            stack.add_overlay_child(menu_el);
+            main_content = stack.finish();
         }
 
         // 9. 对话框（覆盖层）
@@ -1425,13 +1400,13 @@ impl View for SftpBrowserView {
                 &self.rename_editor,
                 &self.new_folder_editor,
                 appearance,
+                self.dialog_confirm_btn.clone(),
+                self.dialog_cancel_btn.clone(),
             );
-            main_content = Flex::column()
-                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_child(main_content)
-                .with_child(dialog_el)
-                .finish();
+            let mut stack = Stack::new();
+            stack.add_child(main_content);
+            stack.add_overlay_child(dialog_el);
+            main_content = stack.finish();
         }
 
         // 10. 拖拽视觉反馈
@@ -1454,12 +1429,10 @@ impl View for SftpBrowserView {
                 .with_border(Border::all(2.0).with_border_fill(theme.accent().into_solid()))
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.0)))
                 .finish();
-            main_content = Flex::column()
-                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_child(main_content)
-                .with_child(overlay_container)
-                .finish();
+            let mut stack = Stack::new();
+            stack.add_child(main_content);
+            stack.add_child(overlay_container);
+            main_content = stack.finish();
         }
 
         // 11. 拖拽事件拦截

@@ -252,7 +252,6 @@ fn test_initial_state() {
             assert!(view.transfers.is_empty(), "初始传输列表应为空");
             assert!(view.search_filter.is_none(), "初始搜索过滤应为 None");
             assert!(!view.is_drag_hovering, "初始拖拽悬停应为 false");
-            assert!(view.error_message.is_some(), "无 SSH 连接时应有错误消息");
         });
     });
 }
