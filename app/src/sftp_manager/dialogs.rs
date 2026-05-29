@@ -8,10 +8,11 @@ use std::path::PathBuf;
 
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
-    Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex,
-    Hoverable, MainAxisAlignment, ParentElement, Radius, Text,
+    Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Flex,
+    Hoverable, MainAxisSize, MainAxisAlignment, ParentElement, Radius, Text,
 };
 use warpui::platform::Cursor;
+use warpui::elements::MouseStateHandle;
 use warpui::Element;
 use warpui::ViewHandle;
 
@@ -49,6 +50,7 @@ fn render_button(
     is_accent: bool,
     appearance: &Appearance,
     action: SftpBrowserAction,
+    mouse_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let ui_font = appearance.ui_font_family();
@@ -65,13 +67,19 @@ fn render_button(
     };
     let label_owned = label.to_string();
 
-    Hoverable::new(Default::default(), move |_| {
+    Hoverable::new(mouse_state, move |_| {
         let text_el = Text::new_inline(label_owned.clone(), ui_font, ui_font_size)
             .with_color(text_color.into())
             .finish();
+        let centered = Flex::row()
+            .with_main_axis_alignment(MainAxisAlignment::Center)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(text_el)
+            .finish();
         Container::new(
-            ConstrainedBox::new(text_el)
-                .with_min_width(BUTTON_MIN_WIDTH)
+            ConstrainedBox::new(centered)
+                .with_width(BUTTON_MIN_WIDTH)
                 .with_height(BUTTON_HEIGHT)
                 .finish(),
         )
@@ -87,20 +95,26 @@ fn render_button(
 }
 
 /// 渲染关闭/取消按钮
-fn render_close_button(appearance: &Appearance) -> Box<dyn Element> {
+fn render_close_button(appearance: &Appearance, mouse_state: MouseStateHandle) -> Box<dyn Element> {
     let theme = appearance.theme();
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
     let text_color = theme.active_ui_text_color();
     let bg = theme.surface_2();
 
-    Hoverable::new(Default::default(), move |_| {
+    Hoverable::new(mouse_state, move |_| {
         let text_el = Text::new_inline(String::from("取消"), ui_font, ui_font_size)
             .with_color(text_color.into())
             .finish();
+        let centered = Flex::row()
+            .with_main_axis_alignment(MainAxisAlignment::Center)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(text_el)
+            .finish();
         Container::new(
-            ConstrainedBox::new(text_el)
-                .with_min_width(BUTTON_MIN_WIDTH)
+            ConstrainedBox::new(centered)
+                .with_width(BUTTON_MIN_WIDTH)
                 .with_height(BUTTON_HEIGHT)
                 .finish(),
         )
@@ -116,7 +130,12 @@ fn render_close_button(appearance: &Appearance) -> Box<dyn Element> {
 }
 
 /// 渲染删除确认对话框
-fn render_delete_confirm(paths: &[PathBuf], appearance: &Appearance) -> Box<dyn Element> {
+fn render_delete_confirm(
+    paths: &[PathBuf],
+    appearance: &Appearance,
+    confirm_btn_state: MouseStateHandle,
+    cancel_btn_state: MouseStateHandle,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_color = theme.active_ui_text_color();
     let sub_color = theme.sub_text_color(theme.background());
@@ -144,15 +163,21 @@ fn render_delete_confirm(paths: &[PathBuf], appearance: &Appearance) -> Box<dyn 
         .finish();
 
     // 按钮
-    let delete_btn = render_button("删除", true, appearance, SftpBrowserAction::ConfirmDelete);
-    let cancel_btn = render_close_button(appearance);
+    let delete_btn = render_button(
+        "删除",
+        true,
+        appearance,
+        SftpBrowserAction::ConfirmDelete,
+        confirm_btn_state,
+    );
+    let cancel_btn = render_close_button(appearance, cancel_btn_state);
 
     let buttons = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_main_axis_alignment(MainAxisAlignment::End)
         .with_spacing(8.0)
-        .with_child(Clipped::new(delete_btn).finish())
-        .with_child(Clipped::new(cancel_btn).finish())
+        .with_child(delete_btn)
+        .with_child(cancel_btn)
         .finish();
 
     let content = Flex::column()
@@ -163,8 +188,15 @@ fn render_delete_confirm(paths: &[PathBuf], appearance: &Appearance) -> Box<dyn 
         .with_child(buttons)
         .finish();
 
-    ConstrainedBox::new(dialog_shell(content, appearance))
+    let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
         .with_width(DIALOG_WIDTH)
+        .finish();
+
+    Dismiss::new(dialog_body)
+        .prevent_interaction_with_other_elements()
+        .on_dismiss(|ctx, _| {
+            ctx.dispatch_typed_action(SftpBrowserAction::CloseDialog);
+        })
         .finish()
 }
 
@@ -173,6 +205,8 @@ fn render_rename(
     original_name: &str,
     editor: &ViewHandle<EditorView>,
     appearance: &Appearance,
+    confirm_btn_state: MouseStateHandle,
+    cancel_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_color = theme.active_ui_text_color();
@@ -202,15 +236,21 @@ fn render_rename(
         .finish();
 
     // 按钮
-    let confirm_btn = render_button("确定", true, appearance, SftpBrowserAction::ConfirmRename);
-    let cancel_btn = render_close_button(appearance);
+    let confirm_btn = render_button(
+        "确定",
+        true,
+        appearance,
+        SftpBrowserAction::ConfirmRename,
+        confirm_btn_state,
+    );
+    let cancel_btn = render_close_button(appearance, cancel_btn_state);
 
     let buttons = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_main_axis_alignment(MainAxisAlignment::End)
         .with_spacing(8.0)
-        .with_child(Clipped::new(confirm_btn).finish())
-        .with_child(Clipped::new(cancel_btn).finish())
+        .with_child(confirm_btn)
+        .with_child(cancel_btn)
         .finish();
 
     let content = Flex::column()
@@ -222,8 +262,15 @@ fn render_rename(
         .with_child(buttons)
         .finish();
 
-    ConstrainedBox::new(dialog_shell(content, appearance))
+    let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
         .with_width(DIALOG_WIDTH)
+        .finish();
+
+    Dismiss::new(dialog_body)
+        .prevent_interaction_with_other_elements()
+        .on_dismiss(|ctx, _| {
+            ctx.dispatch_typed_action(SftpBrowserAction::CloseDialog);
+        })
         .finish()
 }
 
@@ -231,6 +278,8 @@ fn render_rename(
 fn render_create_folder(
     editor: &ViewHandle<EditorView>,
     appearance: &Appearance,
+    confirm_btn_state: MouseStateHandle,
+    cancel_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_color = theme.active_ui_text_color();
@@ -253,15 +302,21 @@ fn render_create_folder(
         .finish();
 
     // 按钮
-    let confirm_btn = render_button("创建", true, appearance, SftpBrowserAction::ConfirmNewFolder);
-    let cancel_btn = render_close_button(appearance);
+    let confirm_btn = render_button(
+        "创建",
+        true,
+        appearance,
+        SftpBrowserAction::ConfirmNewFolder,
+        confirm_btn_state,
+    );
+    let cancel_btn = render_close_button(appearance, cancel_btn_state);
 
     let buttons = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_main_axis_alignment(MainAxisAlignment::End)
         .with_spacing(8.0)
-        .with_child(Clipped::new(confirm_btn).finish())
-        .with_child(Clipped::new(cancel_btn).finish())
+        .with_child(confirm_btn)
+        .with_child(cancel_btn)
         .finish();
 
     let content = Flex::column()
@@ -272,8 +327,15 @@ fn render_create_folder(
         .with_child(buttons)
         .finish();
 
-    ConstrainedBox::new(dialog_shell(content, appearance))
+    let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
         .with_width(DIALOG_WIDTH)
+        .finish();
+
+    Dismiss::new(dialog_body)
+        .prevent_interaction_with_other_elements()
+        .on_dismiss(|ctx, _| {
+            ctx.dispatch_typed_action(SftpBrowserAction::CloseDialog);
+        })
         .finish()
 }
 
@@ -306,7 +368,11 @@ fn detail_row(label: &str, value: &str, appearance: &Appearance) -> Box<dyn Elem
 }
 
 /// 渲染文件详情对话框
-fn render_file_details(entry: &FileEntry, appearance: &Appearance) -> Box<dyn Element> {
+fn render_file_details(
+    entry: &FileEntry,
+    appearance: &Appearance,
+    cancel_btn_state: MouseStateHandle,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_color = theme.active_ui_text_color();
     let ui_font = appearance.ui_font_family();
@@ -339,7 +405,7 @@ fn render_file_details(entry: &FileEntry, appearance: &Appearance) -> Box<dyn El
     rows.add_child(detail_row("路径", &entry.path.display().to_string(), appearance));
 
     // 关闭按钮
-    let close_btn = render_close_button(appearance);
+    let close_btn = render_close_button(appearance, cancel_btn_state);
 
     let content = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -349,8 +415,15 @@ fn render_file_details(entry: &FileEntry, appearance: &Appearance) -> Box<dyn El
         .with_child(close_btn)
         .finish();
 
-    ConstrainedBox::new(dialog_shell(content, appearance))
+    let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
         .with_width(DIALOG_WIDTH)
+        .finish();
+
+    Dismiss::new(dialog_body)
+        .prevent_interaction_with_other_elements()
+        .on_dismiss(|ctx, _| {
+            ctx.dispatch_typed_action(SftpBrowserAction::CloseDialog);
+        })
         .finish()
 }
 
@@ -359,6 +432,8 @@ fn render_move_dialog(
     source: &PathBuf,
     target_dir: &PathBuf,
     appearance: &Appearance,
+    confirm_btn_state: MouseStateHandle,
+    cancel_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_color = theme.active_ui_text_color();
@@ -383,15 +458,21 @@ fn render_move_dialog(
         .with_color(sub_color.into())
         .finish();
 
-    let confirm_btn = render_button("移动", true, appearance, SftpBrowserAction::ConfirmMove);
-    let cancel_btn = render_close_button(appearance);
+    let confirm_btn = render_button(
+        "移动",
+        true,
+        appearance,
+        SftpBrowserAction::ConfirmMove,
+        confirm_btn_state,
+    );
+    let cancel_btn = render_close_button(appearance, cancel_btn_state);
 
     let buttons = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_main_axis_alignment(MainAxisAlignment::End)
         .with_spacing(8.0)
-        .with_child(Clipped::new(confirm_btn).finish())
-        .with_child(Clipped::new(cancel_btn).finish())
+        .with_child(confirm_btn)
+        .with_child(cancel_btn)
         .finish();
 
     let content = Flex::column()
@@ -402,8 +483,15 @@ fn render_move_dialog(
         .with_child(buttons)
         .finish();
 
-    ConstrainedBox::new(dialog_shell(content, appearance))
+    let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
         .with_width(DIALOG_WIDTH)
+        .finish();
+
+    Dismiss::new(dialog_body)
+        .prevent_interaction_with_other_elements()
+        .on_dismiss(|ctx, _| {
+            ctx.dispatch_typed_action(SftpBrowserAction::CloseDialog);
+        })
         .finish()
 }
 
@@ -412,6 +500,8 @@ fn render_overwrite_confirm(
     _source: &PathBuf,
     target: &PathBuf,
     appearance: &Appearance,
+    confirm_btn_state: MouseStateHandle,
+    cancel_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_color = theme.active_ui_text_color();
@@ -432,16 +522,21 @@ fn render_overwrite_confirm(
         .with_color(sub_color.into())
         .finish();
 
-    let confirm_btn =
-        render_button("覆盖", true, appearance, SftpBrowserAction::ConfirmOverwrite);
-    let cancel_btn = render_close_button(appearance);
+    let confirm_btn = render_button(
+        "覆盖",
+        true,
+        appearance,
+        SftpBrowserAction::ConfirmOverwrite,
+        confirm_btn_state,
+    );
+    let cancel_btn = render_close_button(appearance, cancel_btn_state);
 
     let buttons = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_main_axis_alignment(MainAxisAlignment::End)
         .with_spacing(8.0)
-        .with_child(Clipped::new(confirm_btn).finish())
-        .with_child(Clipped::new(cancel_btn).finish())
+        .with_child(confirm_btn)
+        .with_child(cancel_btn)
         .finish();
 
     let content = Flex::column()
@@ -452,8 +547,15 @@ fn render_overwrite_confirm(
         .with_child(buttons)
         .finish();
 
-    ConstrainedBox::new(dialog_shell(content, appearance))
+    let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
         .with_width(DIALOG_WIDTH)
+        .finish();
+
+    Dismiss::new(dialog_body)
+        .prevent_interaction_with_other_elements()
+        .on_dismiss(|ctx, _| {
+            ctx.dispatch_typed_action(SftpBrowserAction::CloseDialog);
+        })
         .finish()
 }
 
@@ -465,20 +567,28 @@ pub fn render_dialog(
     rename_editor: &ViewHandle<EditorView>,
     new_folder_editor: &ViewHandle<EditorView>,
     appearance: &Appearance,
+    confirm_btn_state: MouseStateHandle,
+    cancel_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     match dialog {
-        Dialog::DeleteConfirm { paths } => render_delete_confirm(paths, appearance),
+        Dialog::DeleteConfirm { paths } => {
+            render_delete_confirm(paths, appearance, confirm_btn_state, cancel_btn_state)
+        }
         Dialog::Rename {
             original_name,
             ..
-        } => render_rename(original_name, rename_editor, appearance),
-        Dialog::CreateFolder { .. } => render_create_folder(new_folder_editor, appearance),
-        Dialog::FileDetails { entry } => render_file_details(entry, appearance),
+        } => render_rename(original_name, rename_editor, appearance, confirm_btn_state, cancel_btn_state),
+        Dialog::CreateFolder { .. } => {
+            render_create_folder(new_folder_editor, appearance, confirm_btn_state, cancel_btn_state)
+        }
+        Dialog::FileDetails { entry } => {
+            render_file_details(entry, appearance, cancel_btn_state)
+        }
         Dialog::Move { source, target_dir } => {
-            render_move_dialog(source, target_dir, appearance)
+            render_move_dialog(source, target_dir, appearance, confirm_btn_state, cancel_btn_state)
         }
         Dialog::OverwriteConfirm { source, target } => {
-            render_overwrite_confirm(source, target, appearance)
+            render_overwrite_confirm(source, target, appearance, confirm_btn_state, cancel_btn_state)
         }
     }
 }
