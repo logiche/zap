@@ -14,7 +14,11 @@ use warpui::TypedActionView;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 
+use pathfinder_geometry::vector::Vector2F;
+
 use super::browser::{SftpBrowserAction, SftpBrowserView};
+use super::types::{ConnectionState, Dialog, TransferState};
+use crate::editor::EditorView;
 
 /// 初始化测试所需的最小单例集合
 fn initialize_app(app: &mut warpui::App) {
@@ -669,6 +673,934 @@ fn test_rename_entry_no_connection() {
 
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::RenameEntry(0), ctx);
+        });
+    });
+}
+
+// ============================================================
+// Category 1: 对话框操作无连接安全测试
+// ============================================================
+
+/// 验证 ConfirmDelete 无 dialog、无连接时不 panic
+#[test]
+fn test_confirm_delete_no_connection_no_dialog() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ConfirmDelete, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+        });
+    });
+}
+
+/// 验证 ConfirmDelete 有 dialog 但无连接时安全处理
+#[test]
+fn test_confirm_delete_no_connection_with_dialog() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.dialog = Some(Dialog::DeleteConfirm {
+                paths: vec![PathBuf::from("/tmp/test")],
+            });
+            view.handle_action(&SftpBrowserAction::ConfirmDelete, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+        });
+    });
+}
+
+/// 验证 ConfirmRename 无 dialog、无连接时不 panic
+#[test]
+fn test_confirm_rename_no_connection_no_dialog() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ConfirmRename, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+        });
+    });
+}
+
+/// 验证 ConfirmRename 有 dialog 但无连接时提示错误并关闭 dialog
+#[test]
+fn test_confirm_rename_no_connection_with_dialog() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.dialog = Some(Dialog::Rename {
+                path: PathBuf::from("/home/old.txt"),
+                original_name: "old.txt".to_string(),
+            });
+            // 先输入非空名称以跳过空名称检查
+            view.rename_editor.update(ctx, |e: &mut EditorView, ctx| {
+                e.set_buffer_text("new_name", ctx);
+            });
+            view.handle_action(&SftpBrowserAction::ConfirmRename, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+        });
+    });
+}
+
+/// 验证 ConfirmNewFolder 无 dialog、无连接时不 panic
+#[test]
+fn test_confirm_new_folder_no_connection_no_dialog() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ConfirmNewFolder, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+        });
+    });
+}
+
+/// 验证 ConfirmNewFolder 有 dialog 但无连接时提示错误并关闭 dialog
+#[test]
+fn test_confirm_new_folder_no_connection_with_dialog() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.dialog = Some(Dialog::CreateFolder {
+                parent_path: PathBuf::from("/home"),
+            });
+            // 先输入非空名称以跳过空名称检查
+            view.new_folder_editor.update(ctx, |e: &mut EditorView, ctx| {
+                e.set_buffer_text("new_folder", ctx);
+            });
+            view.handle_action(&SftpBrowserAction::ConfirmNewFolder, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+        });
+    });
+}
+
+/// 验证 ConfirmMove 无 dialog、无连接时不 panic
+#[test]
+fn test_confirm_move_no_connection_no_dialog() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ConfirmMove, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+        });
+    });
+}
+
+/// 验证 ConfirmMove 有 dialog 但无连接时提示错误并关闭 dialog
+#[test]
+fn test_confirm_move_no_connection_with_dialog() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.dialog = Some(Dialog::Move {
+                source: PathBuf::from("/home/file.txt"),
+                target_dir: PathBuf::from("/home/backup"),
+            });
+            view.handle_action(&SftpBrowserAction::ConfirmMove, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+        });
+    });
+}
+
+// ============================================================
+// Category 2: 导航边界测试
+// ============================================================
+
+/// 验证 NavigateTo 当前路径时不产生重复历史
+#[test]
+fn test_navigate_to_same_path() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::NavigateTo(PathBuf::from("/")), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.current_path, PathBuf::from("/"));
+            assert_eq!(view.path_history.len(), 1);
+        });
+    });
+}
+
+/// 验证 NavigateTo 深层路径正确更新
+#[test]
+fn test_navigate_to_deep_path() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::NavigateTo(PathBuf::from("/a/b/c/d")),
+                ctx,
+            );
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.current_path, PathBuf::from("/a/b/c/d"));
+            assert_eq!(view.path_history.len(), 2);
+        });
+    });
+}
+
+/// 验证 NavigateTo 将反斜杠规范化为正斜杠
+#[test]
+fn test_navigate_to_backslash_path() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::NavigateTo(PathBuf::from(r"home\user")),
+                ctx,
+            );
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.current_path, PathBuf::from("home/user"));
+        });
+    });
+}
+
+/// 验证 GoBack 在初始历史位置不做操作
+#[test]
+fn test_go_back_at_initial() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::GoBack, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.current_path, PathBuf::from("/"));
+        });
+    });
+}
+
+/// 验证 GoForward 在初始历史位置不做操作
+#[test]
+fn test_go_forward_at_initial() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::GoForward, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.current_path, PathBuf::from("/"));
+        });
+    });
+}
+
+/// 验证 GoUp 从根路径不做操作
+#[test]
+fn test_go_up_from_root_via_action() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::GoUp, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.current_path, PathBuf::from("/"));
+        });
+    });
+}
+
+/// 验证多步导航后 GoBack/GoForward 历史追踪正确
+#[test]
+fn test_multiple_navigate_then_back_forward() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::NavigateTo(PathBuf::from("/home")), ctx);
+            view.handle_action(&SftpBrowserAction::NavigateTo(PathBuf::from("/var")), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.current_path, PathBuf::from("/var"));
+            assert_eq!(view.path_history.len(), 3);
+            assert_eq!(view.history_index, 2);
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::GoBack, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.current_path, PathBuf::from("/home"));
+            assert_eq!(view.history_index, 1);
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::GoForward, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.current_path, PathBuf::from("/var"));
+            assert_eq!(view.history_index, 2);
+        });
+    });
+}
+
+// ============================================================
+// Category 3: 对话框开关循环测试
+// ============================================================
+
+/// 验证 NewFolder 打开 CreateFolder 对话框
+#[test]
+fn test_new_folder_opens_dialog() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::NewFolder, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(matches!(view.dialog, Some(Dialog::CreateFolder { .. })));
+        });
+    });
+}
+
+/// 验证 CloseDialog 清除对话框
+#[test]
+fn test_close_dialog_clears() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::NewFolder, ctx);
+            view.handle_action(&SftpBrowserAction::CloseDialog, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+        });
+    });
+}
+
+/// 验证 ConfirmOverwrite 关闭对话框
+#[test]
+fn test_confirm_overwrite_closes_dialog() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.dialog = Some(Dialog::OverwriteConfirm {
+                source: PathBuf::from("/a"),
+                target: PathBuf::from("/b"),
+            });
+            view.handle_action(&SftpBrowserAction::ConfirmOverwrite, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+        });
+    });
+}
+
+/// 验证 CloseDialog 在无 dialog 时不 panic
+#[test]
+fn test_close_dialog_when_none() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CloseDialog, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+        });
+    });
+}
+
+/// 验证对话框多次开关循环稳定性
+#[test]
+fn test_dialog_multiple_cycles() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        for _ in 0..3 {
+            view.update(&mut app, |view, ctx| {
+                view.handle_action(&SftpBrowserAction::NewFolder, ctx);
+            });
+            view.read(&app, |view, _| {
+                assert!(view.dialog.is_some());
+            });
+
+            view.update(&mut app, |view, ctx| {
+                view.handle_action(&SftpBrowserAction::CloseDialog, ctx);
+            });
+            view.read(&app, |view, _| {
+                assert!(view.dialog.is_none());
+            });
+        }
+    });
+}
+
+// ============================================================
+// Category 4: 传输任务生命周期测试
+// ============================================================
+
+/// 验证取消不存在的任务 ID 不 panic
+#[test]
+fn test_cancel_transfer_nonexistent_id() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CancelTransfer(999), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.transfers.is_empty());
+        });
+    });
+}
+
+/// 验证取消 ID 为 0 的不存在任务不 panic
+#[test]
+fn test_cancel_transfer_zero_id() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CancelTransfer(0), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.transfers.is_empty());
+        });
+    });
+}
+
+/// 验证 DownloadSaveAs 越界索引不 panic 且不创建孤立任务
+#[test]
+fn test_download_save_as_out_of_range() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::DownloadSaveAs {
+                    index: 100,
+                    local_path: "/tmp/out.txt".to_string(),
+                },
+                ctx,
+            );
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.transfers.is_empty());
+            assert_eq!(view.next_transfer_id, 1);
+        });
+    });
+}
+
+/// 验证 DownloadSaveAs 在空条目列表 index=0 不 panic
+#[test]
+fn test_download_save_as_zero_index_empty() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::DownloadSaveAs {
+                    index: 0,
+                    local_path: "/tmp/out.txt".to_string(),
+                },
+                ctx,
+            );
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.transfers.is_empty());
+        });
+    });
+}
+
+/// 验证 ExecuteUpload 不存在的本地文件且无连接时任务标记为 Failed
+#[test]
+fn test_execute_upload_nonexistent_file() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::ExecuteUpload("/no/such/file.txt".to_string()),
+                ctx,
+            );
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.transfers.len(), 1);
+            assert!(matches!(
+                view.transfers[0].state,
+                TransferState::Failed(_)
+            ));
+        });
+    });
+}
+
+// ============================================================
+// Category 5: DetailsEntry 边界测试
+// ============================================================
+
+/// 验证 DetailsEntry 越界索引不 panic
+#[test]
+fn test_details_entry_out_of_range() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::DetailsEntry(999), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+        });
+    });
+}
+
+/// 验证 DetailsEntry 在空条目 index=0 不 panic
+#[test]
+fn test_details_entry_zero_empty() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::DetailsEntry(0), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+        });
+    });
+}
+
+/// 验证 DetailsEntry 极大索引不 panic
+#[test]
+fn test_details_entry_usize_max() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::DetailsEntry(usize::MAX), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+        });
+    });
+}
+
+// ============================================================
+// Category 6: OpenEntry / DownloadEntry 无条目测试
+// ============================================================
+
+/// 验证 OpenEntry 越界索引不 panic，路径不变
+#[test]
+fn test_open_entry_out_of_range() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::OpenEntry(999), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.current_path, PathBuf::from("/"));
+        });
+    });
+}
+
+/// 验证 OpenEntry 在空条目 index=0 不 panic
+#[test]
+fn test_open_entry_zero_empty() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::OpenEntry(0), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.current_path, PathBuf::from("/"));
+        });
+    });
+}
+
+/// 验证 DownloadEntry 在空条目列表不 panic
+#[test]
+fn test_download_entry_empty_entries() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::DownloadEntry(0), ctx);
+        });
+        // 不 panic 即通过
+    });
+}
+
+// ============================================================
+// Category 7: 选择与删除边界测试
+// ============================================================
+
+/// 验证 DeleteSelected 在空选择集不 panic
+#[test]
+fn test_delete_selected_empty_selection() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::DeleteSelected, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+        });
+    });
+}
+
+/// 验证 DeleteSelected 有选择但无条目不 panic
+#[test]
+fn test_delete_selected_no_entries() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::SelectEntry(0), ctx);
+            view.handle_action(&SftpBrowserAction::DeleteSelected, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+        });
+    });
+}
+
+/// 验证 SelectEntry 接受 usize::MAX 不 panic
+#[test]
+fn test_select_entry_usize_max() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::SelectEntry(usize::MAX), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.selected.contains(&usize::MAX));
+        });
+    });
+}
+
+/// 验证多次 SelectEntry 每次清除前一个选择
+#[test]
+fn test_multiple_select_clears_previous() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::SelectEntry(1), ctx);
+            view.handle_action(&SftpBrowserAction::SelectEntry(3), ctx);
+            view.handle_action(&SftpBrowserAction::SelectEntry(7), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.selected.len(), 1);
+            assert!(view.selected.contains(&7));
+            assert!(!view.selected.contains(&1));
+            assert!(!view.selected.contains(&3));
+        });
+    });
+}
+
+// ============================================================
+// Category 8: Render 安全性测试
+// ============================================================
+
+/// 验证初始状态一致性（构造函数会尝试连接，可能为 Failed 或 Disconnected）
+#[test]
+fn test_render_disconnected_state() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.read(&app, |view, _| {
+            // 构造函数调用 connect_to_server，测试环境无 SSH 服务，状态为 Failed
+            assert!(matches!(
+                view.connection,
+                ConnectionState::Failed(_) | ConnectionState::Disconnected
+            ));
+            assert!(!view.is_loading);
+            assert!(view.entries.is_empty());
+            assert!(view.dialog.is_none());
+            assert!(view.context_menu.is_none());
+        });
+    });
+}
+
+/// 验证 drag hover 状态正确设置
+#[test]
+fn test_render_with_drag_hover() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::DragFilesEnter, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.is_drag_hovering);
+        });
+    });
+}
+
+/// 验证搜索过滤状态正确设置
+#[test]
+fn test_render_with_search_filter() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::SetSearchFilter("test".to_string()), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.search_filter.as_deref(), Some("test"));
+        });
+    });
+}
+
+/// 验证右键菜单状态正确设置
+#[test]
+fn test_render_with_context_menu() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::ContextMenu {
+                    index: 0,
+                    position: Vector2F::new(10.0, 20.0),
+                },
+                ctx,
+            );
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.context_menu.is_some());
+        });
+    });
+}
+
+/// 验证对话框打开状态正确设置
+#[test]
+fn test_render_with_dialog_open() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::NewFolder, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_some());
+        });
+    });
+}
+
+/// 验证传输任务创建后状态正确
+#[test]
+fn test_render_with_transfer_task() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::ExecuteUpload("/tmp/x.txt".to_string()),
+                ctx,
+            );
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.transfers.len(), 1);
+        });
+    });
+}
+
+/// 验证所有叠加层同时存在时不 panic
+#[test]
+fn test_render_all_overlays_combined() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::DragFilesEnter, ctx);
+            view.handle_action(&SftpBrowserAction::SetSearchFilter("x".to_string()), ctx);
+            view.handle_action(
+                &SftpBrowserAction::ContextMenu {
+                    index: 0,
+                    position: Vector2F::new(5.0, 5.0),
+                },
+                ctx,
+            );
+            view.handle_action(&SftpBrowserAction::NewFolder, ctx);
+            view.handle_action(
+                &SftpBrowserAction::ExecuteUpload("/tmp/test.txt".to_string()),
+                ctx,
+            );
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.is_drag_hovering);
+            assert!(view.search_filter.is_some());
+            assert!(view.context_menu.is_some());
+            assert!(view.dialog.is_some());
+            assert_eq!(view.transfers.len(), 1);
+        });
+    });
+}
+
+/// 验证所有叠加层关闭后状态正确清零
+#[test]
+fn test_render_after_close_all_overlays() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        // 开启所有叠加层
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::DragFilesEnter, ctx);
+            view.handle_action(&SftpBrowserAction::SetSearchFilter("x".to_string()), ctx);
+            view.handle_action(
+                &SftpBrowserAction::ContextMenu {
+                    index: 0,
+                    position: Vector2F::new(5.0, 5.0),
+                },
+                ctx,
+            );
+            view.handle_action(&SftpBrowserAction::NewFolder, ctx);
+        });
+
+        // 关闭所有叠加层
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::DragFilesLeave, ctx);
+            view.handle_action(&SftpBrowserAction::ClearSearchFilter, ctx);
+            view.handle_action(&SftpBrowserAction::CloseContextMenu, ctx);
+            view.handle_action(&SftpBrowserAction::CloseDialog, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(!view.is_drag_hovering);
+            assert!(view.search_filter.is_none());
+            assert!(view.context_menu.is_none());
+            assert!(view.dialog.is_none());
+        });
+    });
+}
+
+/// 验证初始路径历史状态
+#[test]
+fn test_render_path_history_initial() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.path_history, vec![PathBuf::from("/")]);
+            assert_eq!(view.history_index, 0);
+        });
+    });
+}
+
+/// 验证初始 is_loading 为 false
+#[test]
+fn test_render_is_loading_initial_false() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+
+        view.read(&app, |view, _| {
+            assert!(!view.is_loading);
         });
     });
 }

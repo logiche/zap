@@ -464,4 +464,106 @@ mod tests {
         assert_eq!(cloned.size, 2048);
         assert_eq!(cloned.modified, Some("2026-01-01".into()));
     }
+
+    // ==================== 补充边界场景测试 ====================
+
+    /// 测试 format_size 极大值（u64::MAX）
+    #[test]
+    fn test_format_size_u64_max() {
+        let result = format_size(u64::MAX);
+        assert!(result.contains("GB"), "u64::MAX 应以 GB 为单位: {result}");
+    }
+
+    /// 测试 format_size 接近 MB 边界值
+    #[test]
+    fn test_format_size_near_mb_boundary() {
+        let just_below_mb = 1024 * 1024 - 1;
+        assert_eq!(format_size(just_below_mb), "1024.0 KB");
+    }
+
+    /// 测试 TransferTask progress_percent 超出范围返回值
+    #[test]
+    fn test_transfer_task_progress_over_100() {
+        let mut task = TransferTask::new(
+            1,
+            PathBuf::from("/a"),
+            PathBuf::from("/b"),
+            TransferDirection::Upload,
+            100,
+        );
+        task.transferred = 200;
+        let pct = task.progress_percent();
+        assert_eq!(pct, 200, "transferred > total_size 时进度为 200%");
+    }
+
+    /// 测试 TransferTask progress_percent 小数截断
+    #[test]
+    fn test_transfer_task_progress_truncation() {
+        let mut task = TransferTask::new(
+            1,
+            PathBuf::from("/a"),
+            PathBuf::from("/b"),
+            TransferDirection::Upload,
+            7,
+        );
+        task.transferred = 1;
+        let pct = task.progress_percent();
+        assert_eq!(pct, 14, "1/7 ≈ 14.28%，截断为 14");
+    }
+
+    /// 测试 TransferTask 多次取消幂等
+    #[test]
+    fn test_transfer_task_cancel_idempotent() {
+        let task = TransferTask::new(
+            1,
+            PathBuf::from("/a"),
+            PathBuf::from("/b"),
+            TransferDirection::Upload,
+            100,
+        );
+        task.cancel();
+        assert!(task.is_cancelled());
+        task.cancel();
+        assert!(task.is_cancelled());
+    }
+
+    /// 测试 TransferState::Failed 空字符串
+    #[test]
+    fn test_transfer_state_failed_empty() {
+        let state = TransferState::Failed(String::new());
+        assert!(matches!(state, TransferState::Failed(_)));
+        let debug = format!("{state:?}");
+        assert!(!debug.is_empty());
+    }
+
+    /// 测试 ConnectionState::Failed 空字符串
+    #[test]
+    fn test_connection_state_failed_empty() {
+        let state = ConnectionState::Failed(String::new());
+        let debug = format!("{state:?}");
+        assert!(!debug.is_empty());
+    }
+
+    /// 测试 Dialog::DeleteConfirm 空路径列表
+    #[test]
+    fn test_dialog_delete_confirm_empty_paths() {
+        let dialog = Dialog::DeleteConfirm { paths: vec![] };
+        assert!(matches!(dialog, Dialog::DeleteConfirm { .. }));
+    }
+
+    /// 测试 FileEntry 全部字段为空/零值
+    #[test]
+    fn test_file_entry_default_values() {
+        let entry = FileEntry {
+            name: String::new(),
+            path: PathBuf::new(),
+            file_type: FileEntryType::Other,
+            size: 0,
+            modified: None,
+            permissions: None,
+        };
+        assert!(entry.name.is_empty());
+        assert_eq!(entry.size, 0);
+        assert!(entry.modified.is_none());
+    }
 }
