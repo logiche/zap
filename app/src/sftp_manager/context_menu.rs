@@ -8,7 +8,7 @@ use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Flex, Hoverable,
-    MainAxisSize, ParentElement, Radius, Text,
+    MainAxisSize, ParentElement, Radius, SavePosition, Text,
 };
 use warpui::platform::Cursor;
 use warpui::Element;
@@ -73,6 +73,7 @@ fn render_menu_item(
     label: &str,
     action: SftpBrowserAction,
     appearance: &Appearance,
+    position_id: &str,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_color = theme.active_ui_text_color();
@@ -82,7 +83,7 @@ fn render_menu_item(
     let ui_font_size = appearance.ui_font_size();
     let label_owned = label.to_string();
 
-    Hoverable::new(Default::default(), move |state| {
+    let item_el = Hoverable::new(Default::default(), move |state| {
         let bg = if state.is_hovered() || state.is_clicked() {
             hover_bg
         } else {
@@ -104,7 +105,9 @@ fn render_menu_item(
         ctx.dispatch_typed_action(action.clone());
         ctx.dispatch_typed_action(SftpBrowserAction::CloseContextMenu);
     })
-    .finish()
+    .finish();
+
+    SavePosition::new(item_el, position_id).finish()
 }
 
 /// 渲染右键上下文菜单
@@ -117,7 +120,15 @@ pub fn render_context_menu(state: &ContextMenuState, appearance: &Appearance) ->
         .with_main_axis_size(MainAxisSize::Min);
 
     for item in &menu_items {
-        let el = render_menu_item(&item.label, item.action.clone(), appearance);
+        let position_id = match &item.action {
+            SftpBrowserAction::OpenEntry(_) => "sftp_ctx:open",
+            SftpBrowserAction::DownloadEntry(_) => "sftp_ctx:download",
+            SftpBrowserAction::RenameEntry(_) => "sftp_ctx:rename",
+            SftpBrowserAction::DeleteEntry(_) => "sftp_ctx:delete",
+            SftpBrowserAction::DetailsEntry(_) => "sftp_ctx:details",
+            _ => "sftp_ctx:unknown",
+        };
+        let el = render_menu_item(&item.label, item.action.clone(), appearance, position_id);
         col.add_child(el);
     }
 

@@ -7,6 +7,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::appearance::Appearance;
@@ -35,6 +36,7 @@ use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
 
 use super::context_menu::ContextMenuState;
+use super::sftp_backend::{LiveSftpBackend, SftpBackend};
 use super::sftp_ops;
 use super::types::{
     ConnectionState, Dialog, FileEntry, FileEntryType, TransferDirection, TransferState,
@@ -138,7 +140,7 @@ pub struct SftpBrowserView {
     /// SFTP 会话
     _session: Option<zap_sftp::SftpSession>,
     /// SFTP 操作通道
-    sftp: Option<zap_sftp::Sftp>,
+    sftp: Option<Arc<dyn SftpBackend>>,
     // ---- 导航 ----
     /// 当前路径
     pub(crate) current_path: PathBuf,
@@ -302,9 +304,81 @@ impl SftpBrowserView {
         me
     }
 
+    /// 注入测试后端，模拟 Connected 状态（仅测试使用）
+    #[cfg(test)]
+    pub(crate) fn set_backend_for_test(
+        &mut self,
+        backend: Arc<dyn SftpBackend>,
+        start_path: PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.connection = ConnectionState::Connected;
+        self.sftp = Some(backend);
+        self.current_path = start_path.clone();
+        self.path_history = vec![start_path];
+        self.history_index = 0;
+        self.refresh_dir(ctx);
+    }
+
+    /// 注入测试后端（集成测试使用）
+    #[cfg(feature = "integration_tests")]
+    pub fn inject_mock_backend(
+        &mut self,
+        backend: Arc<dyn SftpBackend>,
+        start_path: PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.connection = ConnectionState::Connected;
+        self.sftp = Some(backend);
+        self.current_path = start_path.clone();
+        self.path_history = vec![start_path];
+        self.history_index = 0;
+        self.refresh_dir(ctx);
+    }
+
+    /// 集成测试用 getter：连接状态
+    #[cfg(feature = "integration_tests")]
+    pub fn connection_state(&self) -> &ConnectionState {
+        &self.connection
+    }
+
+    /// 集成测试用 getter：文件条目列表
+    #[cfg(feature = "integration_tests")]
+    pub fn entries(&self) -> &[FileEntry] {
+        &self.entries
+    }
+
+    /// 集成测试用 getter：选中集合
+    #[cfg(feature = "integration_tests")]
+    pub fn selected(&self) -> &HashSet<usize> {
+        &self.selected
+    }
+
+    /// 集成测试用 getter：对话框状态
+    #[cfg(feature = "integration_tests")]
+    pub fn dialog(&self) -> &Option<Dialog> {
+        &self.dialog
+    }
+
+    /// 集成测试用 getter：右键菜单状态
+    #[cfg(feature = "integration_tests")]
+    pub fn context_menu(&self) -> &Option<ContextMenuState> {
+        &self.context_menu
+    }
+
     /// 获取 pane 配置
     pub fn pane_configuration(&self) -> ModelHandle<PaneConfiguration> {
         self.pane_configuration.clone()
+    }
+
+    /// 测试用：断开连接，清空状态
+    #[cfg(test)]
+    pub(crate) fn disconnect_for_test(&mut self, ctx: &mut ViewContext<Self>) {
+        self.connection = ConnectionState::Disconnected;
+        self.sftp = None;
+        self.entries.clear();
+        self.selected.clear();
+        ctx.notify();
     }
 
     /// 连接到 SSH 服务器并建立 SFTP 通道
@@ -326,8 +400,9 @@ impl SftpBrowserView {
                     Ok(session) => {
                         match session.sftp() {
                             Ok(sftp) => {
+                                let backend = Arc::new(LiveSftpBackend::new(sftp)) as Arc<dyn SftpBackend>;
                                 // 解析用户 home 目录
-                                if let Ok(home) = sftp.realpath(std::path::Path::new(".")) {
+                                if let Ok(home) = backend.realpath(std::path::Path::new(".")) {
                                     self.current_path = normalize_remote_path(&home);
                                 } else {
                                     self.current_path = PathBuf::from("/");
@@ -336,7 +411,7 @@ impl SftpBrowserView {
                                 self.history_index = 0;
                                 self.connection = ConnectionState::Connected;
                                 self._session = Some(session);
-                                self.sftp = Some(sftp);
+                                self.sftp = Some(backend);
                                 self.is_loading = false;
                                 self.refresh_dir(ctx);
                             }
@@ -385,7 +460,7 @@ impl SftpBrowserView {
         ctx.notify();
 
         let path = self.current_path.clone();
-        match sftp_ops::list_dir(&sftp, &path) {
+        match sftp.list_dir(&path) {
             Ok(mut entries) => {
                 // 排序：目录在前，文件在后，各自按名称排序
                 entries.sort_by(|a, b| match (a.file_type, b.file_type) {
@@ -535,9 +610,9 @@ impl SftpBrowserView {
                 .iter()
                 .any(|e| e.path == *path && matches!(e.file_type, FileEntryType::Directory))
             {
-                sftp_ops::delete_dir_recursive(&sftp, path)
+                sftp.delete_dir_recursive(path)
             } else {
-                sftp_ops::delete_file(&sftp, path)
+                sftp.delete_file(path)
             };
             if let Err(e) = result {
                 self.show_error_toast(format!("删除失败: {e}"), ctx);
@@ -601,6 +676,7 @@ impl SftpBrowserView {
         action: SftpBrowserAction,
         _tooltip: &str,
         appearance: &Appearance,
+        position_id: &'static str,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let icon_color = theme.sub_text_color(theme.background());
@@ -610,7 +686,7 @@ impl SftpBrowserView {
             .with_height(TOOLBAR_ICON_SIZE)
             .finish();
 
-        Hoverable::new(handle, move |_| {
+        let btn_el = Hoverable::new(handle, move |_| {
             Container::new(
                 ConstrainedBox::new(Container::new(icon_el).with_uniform_padding(6.0).finish())
                     .with_width(TOOLBAR_BTN_SIZE)
@@ -624,7 +700,9 @@ impl SftpBrowserView {
         .on_click(move |ctx, _, _| {
             ctx.dispatch_typed_action(action.clone());
         })
-        .finish()
+        .finish();
+
+        SavePosition::new(btn_el, position_id).finish()
     }
 
     /// 渲染工具栏
@@ -638,6 +716,7 @@ impl SftpBrowserView {
                 SftpBrowserAction::GoBack,
                 "Back",
                 appearance,
+                "sftp_btn:back",
             ))
             .with_child(self.render_toolbar_btn(
                 Icon::ChevronRight,
@@ -645,6 +724,7 @@ impl SftpBrowserView {
                 SftpBrowserAction::GoForward,
                 "Forward",
                 appearance,
+                "sftp_btn:forward",
             ))
             .with_child(self.render_toolbar_btn(
                 Icon::ArrowUp,
@@ -652,6 +732,7 @@ impl SftpBrowserView {
                 SftpBrowserAction::GoUp,
                 "Up",
                 appearance,
+                "sftp_btn:up",
             ))
             .with_child(self.render_toolbar_btn(
                 Icon::Refresh,
@@ -659,6 +740,7 @@ impl SftpBrowserView {
                 SftpBrowserAction::Refresh,
                 "Refresh",
                 appearance,
+                "sftp_btn:refresh",
             ))
             .with_main_axis_size(MainAxisSize::Min)
             .finish();
@@ -672,6 +754,7 @@ impl SftpBrowserView {
                 SftpBrowserAction::UploadFile,
                 "Upload",
                 appearance,
+                "sftp_btn:upload",
             ))
             .with_child(self.render_toolbar_btn(
                 Icon::Plus,
@@ -679,6 +762,7 @@ impl SftpBrowserView {
                 SftpBrowserAction::NewFolder,
                 "New folder",
                 appearance,
+                "sftp_btn:new_folder",
             ))
             .with_main_axis_size(MainAxisSize::Min)
             .finish();
@@ -712,7 +796,12 @@ impl SftpBrowserView {
         )
         .with_color(text_color.into())
         .finish();
-        row.add_child(Container::new(root_text).finish());
+        let root_el = SavePosition::new(
+            Container::new(root_text).finish(),
+            "sftp_breadcrumb:/",
+        )
+        .finish();
+        row.add_child(root_el);
 
         for part in parts {
             row.add_child(part);
@@ -831,8 +920,7 @@ impl SftpBrowserView {
                     transferred_clone.store(bytes, std::sync::atomic::Ordering::SeqCst);
                 });
 
-            let result = sftp_ops::upload_file_streaming(
-                &sftp,
+            let result = sftp.upload_file(
                 local_path,
                 &remote_path,
                 Some(&progress_cb),
@@ -1047,7 +1135,7 @@ impl TypedActionView for SftpBrowserView {
                     let new_path = build_rename_path(original_path, &new_name);
 
                     if let Some(sftp) = &self.sftp {
-                        match sftp_ops::rename(sftp, original_path, &new_path) {
+                        match sftp.rename(original_path, &new_path) {
                             Ok(()) => {
                                 self.dialog = None;
                                 self.refresh_dir(ctx);
@@ -1073,7 +1161,7 @@ impl TypedActionView for SftpBrowserView {
                     let folder_path = build_new_folder_path(parent_path, &folder_name);
 
                     if let Some(sftp) = &self.sftp {
-                        match sftp_ops::create_dir(sftp, &folder_path) {
+                        match sftp.create_dir(&folder_path) {
                             Ok(()) => {
                                 self.dialog = None;
                                 self.refresh_dir(ctx);
@@ -1141,7 +1229,7 @@ impl TypedActionView for SftpBrowserView {
                     let target_path = target_dir.join(&file_name);
 
                     if let Some(sftp) = &self.sftp {
-                        match sftp_ops::rename(sftp, source, &target_path) {
+                        match sftp.rename(source, &target_path) {
                             Ok(()) => {
                                 self.dialog = None;
                                 self.refresh_dir(ctx);
@@ -1213,8 +1301,7 @@ impl TypedActionView for SftpBrowserView {
                                 transferred_clone.store(bytes, std::sync::atomic::Ordering::SeqCst);
                             });
 
-                        let result = sftp_ops::download_file_streaming(
-                            &sftp,
+                        let result = sftp.download_file(
                             &entry.path,
                             &local_path,
                             Some(&progress_cb),

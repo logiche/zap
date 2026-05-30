@@ -112,7 +112,7 @@ macro_rules! integration_tests {
             #[allow(unused_attributes)]
             // For right now, we only want to run integration tests on macOS
             // and Linux (iff the run_on_linux feature is enabled).
-            #[cfg_attr(not(any(target_os = "macos", feature = "run_on_linux")), ignore)]
+            #[cfg_attr(not(any(target_os = "macos", feature = "run_on_linux", feature = "run_on_windows")), ignore)]
             #[test]
             fn $name() -> Result<(), String> {
                 $crate::common::run_integration_test(stringify!($name))

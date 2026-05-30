@@ -10,7 +10,7 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warpui::elements::{
     Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Flex,
-    Hoverable, MainAxisSize, MainAxisAlignment, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
+    Hoverable, MainAxisSize, MainAxisAlignment, MouseStateHandle, ParentElement, Radius, SavePosition, Shrinkable, Text,
 };
 use warpui::platform::Cursor;
 use warpui::Element;
@@ -22,6 +22,8 @@ use crate::sftp_manager::types::{format_size, Dialog, FileEntry};
 
 /// 对话框最大宽度
 const DIALOG_MAX_WIDTH: f32 = 360.0;
+/// 对话框最大高度
+const DIALOG_MAX_HEIGHT: f32 = 500.0;
 /// 对话框内边距
 const DIALOG_PADDING: f32 = 16.0;
 /// 按钮最小宽度
@@ -102,6 +104,7 @@ fn render_button(
     appearance: &Appearance,
     action: SftpBrowserAction,
     mouse_state: MouseStateHandle,
+    position_id: Option<&str>,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let ui_font = appearance.ui_font_family();
@@ -118,7 +121,7 @@ fn render_button(
     };
     let label_owned = label.to_string();
 
-    Hoverable::new(mouse_state, move |_| {
+    let btn_el = Hoverable::new(mouse_state, move |_| {
         let text_el = Text::new(label_owned.clone(), ui_font, ui_font_size)
             .with_color(text_color.into())
             .finish();
@@ -142,12 +145,17 @@ fn render_button(
     .on_click(move |ctx, _, _| {
         ctx.dispatch_typed_action(action.clone());
     })
-    .finish()
+    .finish();
+
+    match position_id {
+        Some(id) => SavePosition::new(btn_el, id).finish(),
+        None => btn_el,
+    }
 }
 
 /// 渲染取消按钮
 fn render_cancel_button(appearance: &Appearance, mouse_state: MouseStateHandle) -> Box<dyn Element> {
-    render_button("取消", false, appearance, SftpBrowserAction::CloseDialog, mouse_state)
+    render_button("取消", false, appearance, SftpBrowserAction::CloseDialog, mouse_state, Some("sftp_btn:dialog_cancel"))
 }
 
 /// 渲染描述性确认对话框（标题 + 描述 + 确认/取消按钮）
@@ -177,7 +185,7 @@ fn render_confirm_dialog(
     )
     .finish();
 
-    let confirm_btn = render_button(confirm_label, true, appearance, confirm_action, confirm_btn_state);
+    let confirm_btn = render_button(confirm_label, true, appearance, confirm_action, confirm_btn_state, Some("sftp_btn:dialog_confirm"));
     let cancel_btn = render_cancel_button(appearance, cancel_btn_state);
 
     let buttons = Flex::row()
@@ -198,6 +206,7 @@ fn render_confirm_dialog(
 
     let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
         .with_max_width(DIALOG_MAX_WIDTH)
+        .with_max_height(DIALOG_MAX_HEIGHT)
         .finish();
 
     wrap_dismiss(dialog_body)
@@ -291,6 +300,7 @@ fn render_rename(
         appearance,
         SftpBrowserAction::ConfirmRename,
         confirm_btn_state,
+        Some("sftp_btn:dialog_confirm"),
     );
     let cancel_btn = render_cancel_button(appearance, cancel_btn_state);
 
@@ -313,6 +323,7 @@ fn render_rename(
 
     let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
         .with_max_width(DIALOG_MAX_WIDTH)
+        .with_max_height(DIALOG_MAX_HEIGHT)
         .finish();
 
     wrap_dismiss(dialog_body)
@@ -353,6 +364,7 @@ fn render_create_folder(
         appearance,
         SftpBrowserAction::ConfirmNewFolder,
         confirm_btn_state,
+        Some("sftp_btn:dialog_confirm"),
     );
     let cancel_btn = render_cancel_button(appearance, cancel_btn_state);
 
@@ -374,6 +386,7 @@ fn render_create_folder(
 
     let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
         .with_max_width(DIALOG_MAX_WIDTH)
+        .with_max_height(DIALOG_MAX_HEIGHT)
         .finish();
 
     wrap_dismiss(dialog_body)
@@ -454,6 +467,7 @@ fn render_file_details(
 
     let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
         .with_max_width(DIALOG_MAX_WIDTH)
+        .with_max_height(DIALOG_MAX_HEIGHT)
         .finish();
 
     wrap_dismiss(dialog_body)

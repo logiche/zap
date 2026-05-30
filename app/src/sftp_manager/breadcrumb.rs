@@ -7,7 +7,7 @@
 use std::path::{Component, PathBuf};
 
 use warp_core::ui::appearance::Appearance;
-use warpui::elements::{ConstrainedBox, Container, Hoverable, Text};
+use warpui::elements::{ConstrainedBox, Container, Hoverable, SavePosition, Text};
 use warpui::platform::Cursor;
 use warpui::Element;
 
@@ -75,6 +75,7 @@ pub fn render_breadcrumb(current_path: &PathBuf, appearance: &Appearance) -> Vec
         } else {
             // 非最后一段可点击导航
             let label_for_closure = segment_label.clone();
+            let position_id = format!("sftp_breadcrumb:{}", accumulated.display());
             let hoverable = Hoverable::new(Default::default(), move |_| {
                 let text_el = Text::new_inline(label_for_closure.clone(), ui_font, ui_font_size)
                     .with_color(sub_color.into())
@@ -86,7 +87,7 @@ pub fn render_breadcrumb(current_path: &PathBuf, appearance: &Appearance) -> Vec
                 ctx.dispatch_typed_action(SftpBrowserAction::NavigateTo(target_path.clone()));
             })
             .finish();
-            elements.push(hoverable);
+            elements.push(SavePosition::new(hoverable, &position_id).finish());
         }
     }
 

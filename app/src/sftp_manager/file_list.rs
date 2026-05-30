@@ -10,7 +10,7 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Fill, Flex, Hoverable,
-    MouseStateHandle, ParentElement, Shrinkable, Text,
+    MouseStateHandle, ParentElement, SavePosition, Shrinkable, Text,
 };
 use warpui::platform::Cursor;
 use warpui::Element;
@@ -216,7 +216,9 @@ pub fn render_file_rows(
         let is_selected = selected.contains(&index);
         let mouse_handle = mouse_handles.get(index).cloned().unwrap_or_default();
         let row = render_file_row(entry, index, is_selected, mouse_handle, appearance);
-        col.add_child(row);
+        let position_id = format!("sftp_row:{}", index);
+        let positioned = SavePosition::new(row, &position_id).finish();
+        col.add_child(positioned);
     }
 
     col.finish()

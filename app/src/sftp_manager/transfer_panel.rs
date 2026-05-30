@@ -7,7 +7,7 @@
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
-    ParentElement, Radius, Shrinkable, Text,
+    ParentElement, Radius, SavePosition, Shrinkable, Text,
 };
 use warpui::platform::Cursor;
 use warpui::Element;
@@ -153,8 +153,9 @@ fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn 
         let icon_color = appearance
             .theme()
             .sub_text_color(appearance.theme().background());
+        let position_id = format!("sftp_btn:cancel_transfer:{}", task_id);
 
-        let cancel_btn = Hoverable::new(Default::default(), move |_| {
+        let cancel_el = Hoverable::new(Default::default(), move |_| {
             let icon_el = ConstrainedBox::new(Icon::X.to_warpui_icon(icon_color).finish())
                 .with_width(12.0)
                 .with_height(12.0)
@@ -167,7 +168,8 @@ fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn 
         })
         .finish();
 
-        top_row = top_row.with_child(Clipped::new(cancel_btn).finish());
+        let positioned = SavePosition::new(cancel_el, &position_id).finish();
+        top_row = top_row.with_child(Clipped::new(positioned).finish());
     }
 
     let mut col = Flex::column()
