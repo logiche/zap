@@ -22,7 +22,6 @@ pub fn render_breadcrumb(current_path: &PathBuf, appearance: &Appearance) -> Vec
     let theme = appearance.theme();
     let text_color = theme.active_ui_text_color();
     let sub_color = theme.sub_text_color(theme.background());
-    let separator_color = sub_color;
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
 
@@ -50,7 +49,7 @@ pub fn render_breadcrumb(current_path: &PathBuf, appearance: &Appearance) -> Vec
         if i > 0 {
             let sep_icon = ConstrainedBox::new(
                 Icon::ChevronRight
-                    .to_warpui_icon(separator_color.into())
+                    .to_warpui_icon(sub_color.into())
                     .finish(),
             )
             .with_width(12.0)

@@ -87,16 +87,10 @@ pub fn list_dir(sftp: &Sftp, path: &Path) -> Result<Vec<FileEntry>, SftpOpsError
             });
             let perms = &entry.metadata.permissions;
             let permissions = Some(format!(
-                "{}{}{}{}{}{}{}{}{}",
-                if perms.owner_read { 'r' } else { '-' },
-                if perms.owner_write { 'w' } else { '-' },
-                if perms.owner_exec { 'x' } else { '-' },
-                if perms.group_read { 'r' } else { '-' },
-                if perms.group_write { 'w' } else { '-' },
-                if perms.group_exec { 'x' } else { '-' },
-                if perms.other_read { 'r' } else { '-' },
-                if perms.other_write { 'w' } else { '-' },
-                if perms.other_exec { 'x' } else { '-' },
+                "{}{}{}",
+                bool_to_rwx(perms.owner_read, perms.owner_write, perms.owner_exec),
+                bool_to_rwx(perms.group_read, perms.group_write, perms.group_exec),
+                bool_to_rwx(perms.other_read, perms.other_write, perms.other_exec),
             ));
             FileEntry {
                 name: entry.name,
@@ -352,6 +346,15 @@ fn shellexpand_path(path: &str) -> String {
     path.to_string()
 }
 
+/// 将读/写/执行布尔值转换为 rwx 权限字符串
+fn bool_to_rwx(read: bool, write: bool, exec: bool) -> String {
+    let mut s = String::with_capacity(3);
+    s.push(if read { 'r' } else { '-' });
+    s.push(if write { 'w' } else { '-' });
+    s.push(if exec { 'x' } else { '-' });
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,5 +454,148 @@ mod tests {
     fn test_shellexpand_path_empty() {
         let result = shellexpand_path("");
         assert_eq!(result, "");
+    }
+
+    // ==================== bool_to_rwx 测试 ====================
+
+    /// 测试全部权限 rwx
+    #[test]
+    fn test_bool_to_rwx_all_true() {
+        assert_eq!(bool_to_rwx(true, true, true), "rwx");
+    }
+
+    /// 测试全部无权限
+    #[test]
+    fn test_bool_to_rwx_all_false() {
+        assert_eq!(bool_to_rwx(false, false, false), "---");
+    }
+
+    /// 测试仅读权限
+    #[test]
+    fn test_bool_to_rwx_read_only() {
+        assert_eq!(bool_to_rwx(true, false, false), "r--");
+    }
+
+    /// 测试仅写权限
+    #[test]
+    fn test_bool_to_rwx_write_only() {
+        assert_eq!(bool_to_rwx(false, true, false), "-w-");
+    }
+
+    /// 测试仅执行权限
+    #[test]
+    fn test_bool_to_rwx_exec_only() {
+        assert_eq!(bool_to_rwx(false, false, true), "--x");
+    }
+
+    /// 测试读写权限
+    #[test]
+    fn test_bool_to_rwx_read_write() {
+        assert_eq!(bool_to_rwx(true, true, false), "rw-");
+    }
+
+    /// 测试读执行权限
+    #[test]
+    fn test_bool_to_rwx_read_exec() {
+        assert_eq!(bool_to_rwx(true, false, true), "r-x");
+    }
+
+    /// 测试写执行权限
+    #[test]
+    fn test_bool_to_rwx_write_exec() {
+        assert_eq!(bool_to_rwx(false, true, true), "-wx");
+    }
+
+    /// 测试返回值长度始终为 3
+    #[test]
+    fn test_bool_to_rwx_length() {
+        for r in [true, false] {
+            for w in [true, false] {
+                for x in [true, false] {
+                    assert_eq!(bool_to_rwx(r, w, x).len(), 3);
+                }
+            }
+        }
+    }
+
+    /// 测试每个位置字符只可能是目标字符
+    #[test]
+    fn test_bool_to_rwx_valid_chars() {
+        for r in [true, false] {
+            for w in [true, false] {
+                for x in [true, false] {
+                    let s = bool_to_rwx(r, w, x);
+                    let chars: Vec<char> = s.chars().collect();
+                    assert!((chars[0] == 'r') || (chars[0] == '-'));
+                    assert!((chars[1] == 'w') || (chars[1] == '-'));
+                    assert!((chars[2] == 'x') || (chars[2] == '-'));
+                }
+            }
+        }
+    }
+
+    // ==================== SftpOpsError 边界场景测试 ====================
+
+    /// 测试 SftpOpsError::Connection 空消息
+    #[test]
+    fn test_sftp_ops_error_connection_empty() {
+        assert_eq!(
+            SftpOpsError::Connection(String::new()).to_string(),
+            "连接错误: "
+        );
+    }
+
+    /// 测试 SftpOpsError::Operation 空消息
+    #[test]
+    fn test_sftp_ops_error_operation_empty() {
+        assert_eq!(
+            SftpOpsError::Operation(String::new()).to_string(),
+            "操作错误: "
+        );
+    }
+
+    /// 测试 SftpOpsError::LocalIo 空消息
+    #[test]
+    fn test_sftp_ops_error_local_io_empty() {
+        assert_eq!(
+            SftpOpsError::LocalIo(String::new()).to_string(),
+            "本地 IO 错误: "
+        );
+    }
+
+    /// 测试 SftpOpsError::NoCredentials 空消息
+    #[test]
+    fn test_sftp_ops_error_no_credentials_empty() {
+        assert_eq!(
+            SftpOpsError::NoCredentials(String::new()).to_string(),
+            "未找到凭据: "
+        );
+    }
+
+    /// 测试 SftpOpsError::Cancelled 始终为固定文本
+    #[test]
+    fn test_sftp_ops_error_cancelled_consistent() {
+        let s1 = SftpOpsError::Cancelled.to_string();
+        let s2 = SftpOpsError::Cancelled.to_string();
+        assert_eq!(s1, s2);
+        assert_eq!(s1, "传输已取消");
+    }
+
+    /// 测试 shellexpand_path 多级 ~/ 展开
+    #[test]
+    fn test_shellexpand_path_home_nested() {
+        let result = shellexpand_path("~/a/b/c");
+        assert!(!result.starts_with('~'));
+        assert!(result.contains("a/b/c"));
+    }
+
+    /// 测试 shellexpand_path 仅 ~ 后跟 / 无附加路径
+    #[test]
+    fn test_shellexpand_path_home_root() {
+        let result = shellexpand_path("~/");
+        let home = dirs::home_dir().unwrap_or_default();
+        if !home.as_os_str().is_empty() {
+            assert!(!result.starts_with('~'));
+        }
     }
 }

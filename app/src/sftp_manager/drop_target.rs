@@ -94,7 +94,7 @@ impl Element for SftpDropTargetElement {
                     Event::DragAndDropFiles { paths, location } => {
                         if self.mouse_position_is_in_bounds(*location) && !paths.is_empty() {
                             let paths: Vec<PathBuf> =
-                                paths.iter().map(|p| PathBuf::from(p)).collect();
+                                paths.iter().map(PathBuf::from).collect();
                             ctx.dispatch_typed_action(SftpBrowserAction::DragAndDropFiles(paths));
                         }
                         return true;

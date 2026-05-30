@@ -150,6 +150,59 @@ fn render_cancel_button(appearance: &Appearance, mouse_state: MouseStateHandle) 
     render_button("取消", false, appearance, SftpBrowserAction::CloseDialog, mouse_state)
 }
 
+/// 渲染描述性确认对话框（标题 + 描述 + 确认/取消按钮）
+///
+/// 适用于删除确认、移动确认、覆盖确认等场景。
+fn render_confirm_dialog(
+    title: &str,
+    description: &str,
+    confirm_label: &str,
+    confirm_action: SftpBrowserAction,
+    appearance: &Appearance,
+    confirm_btn_state: MouseStateHandle,
+    cancel_btn_state: MouseStateHandle,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let sub_color = theme.sub_text_color(theme.background());
+    let ui_font = appearance.ui_font_family();
+    let ui_font_size = appearance.ui_font_size();
+
+    let title_bar = render_title_bar(title, appearance);
+
+    let desc_el = Shrinkable::new(
+        1.0,
+        Text::new(description.to_string(), ui_font, ui_font_size)
+            .with_color(sub_color.into())
+            .finish(),
+    )
+    .finish();
+
+    let confirm_btn = render_button(confirm_label, true, appearance, confirm_action, confirm_btn_state);
+    let cancel_btn = render_cancel_button(appearance, cancel_btn_state);
+
+    let buttons = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_alignment(MainAxisAlignment::End)
+        .with_spacing(8.0)
+        .with_child(confirm_btn)
+        .with_child(cancel_btn)
+        .finish();
+
+    let content = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+        .with_spacing(12.0)
+        .with_child(title_bar)
+        .with_child(desc_el)
+        .with_child(buttons)
+        .finish();
+
+    let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
+        .with_max_width(DIALOG_MAX_WIDTH)
+        .finish();
+
+    wrap_dismiss(dialog_body)
+}
+
 /// 将弹窗内容包裹在 Dismiss + 居中容器中
 fn wrap_dismiss(dialog_content: Box<dyn Element>) -> Box<dyn Element> {
     Dismiss::new(dialog_content)
@@ -167,15 +220,6 @@ fn render_delete_confirm(
     confirm_btn_state: MouseStateHandle,
     cancel_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    let sub_color = theme.sub_text_color(theme.background());
-    let ui_font = appearance.ui_font_family();
-    let ui_font_size = appearance.ui_font_size();
-
-    // 标题行
-    let title_bar = render_title_bar("确认删除", appearance);
-
-    // 描述
     let count = paths.len();
     let desc = if count == 1 {
         let name = paths[0]
@@ -186,45 +230,16 @@ fn render_delete_confirm(
     } else {
         format!("确定要删除 {} 个项目吗？此操作不可撤销。", count)
     };
-    let desc_el = Shrinkable::new(
-        1.0,
-        Text::new(desc, ui_font, ui_font_size)
-            .with_color(sub_color.into())
-            .finish(),
-    )
-    .finish();
 
-    // 按钮
-    let delete_btn = render_button(
+    render_confirm_dialog(
+        "确认删除",
+        &desc,
         "删除",
-        true,
-        appearance,
         SftpBrowserAction::ConfirmDelete,
+        appearance,
         confirm_btn_state,
-    );
-    let cancel_btn = render_cancel_button(appearance, cancel_btn_state);
-
-    let buttons = Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_main_axis_alignment(MainAxisAlignment::End)
-        .with_spacing(8.0)
-        .with_child(delete_btn)
-        .with_child(cancel_btn)
-        .finish();
-
-    let content = Flex::column()
-        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-        .with_spacing(12.0)
-        .with_child(title_bar)
-        .with_child(desc_el)
-        .with_child(buttons)
-        .finish();
-
-    let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
-        .with_max_width(DIALOG_MAX_WIDTH)
-        .finish();
-
-    wrap_dismiss(dialog_body)
+        cancel_btn_state,
+    )
 }
 
 /// 渲染重命名对话框
@@ -452,14 +467,6 @@ fn render_move_dialog(
     confirm_btn_state: MouseStateHandle,
     cancel_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    let sub_color = theme.sub_text_color(theme.background());
-    let ui_font = appearance.ui_font_family();
-    let ui_font_size = appearance.ui_font_size();
-
-    // 标题行
-    let title_bar = render_title_bar("移动文件", appearance);
-
     let source_name = source
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -469,44 +476,16 @@ fn render_move_dialog(
         source_name,
         target_dir.display()
     );
-    let desc_el = Shrinkable::new(
-        1.0,
-        Text::new(desc, ui_font, ui_font_size)
-            .with_color(sub_color.into())
-            .finish(),
-    )
-    .finish();
 
-    let confirm_btn = render_button(
+    render_confirm_dialog(
+        "移动文件",
+        &desc,
         "移动",
-        true,
-        appearance,
         SftpBrowserAction::ConfirmMove,
+        appearance,
         confirm_btn_state,
-    );
-    let cancel_btn = render_cancel_button(appearance, cancel_btn_state);
-
-    let buttons = Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_main_axis_alignment(MainAxisAlignment::End)
-        .with_spacing(8.0)
-        .with_child(confirm_btn)
-        .with_child(cancel_btn)
-        .finish();
-
-    let content = Flex::column()
-        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-        .with_spacing(12.0)
-        .with_child(title_bar)
-        .with_child(desc_el)
-        .with_child(buttons)
-        .finish();
-
-    let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
-        .with_max_width(DIALOG_MAX_WIDTH)
-        .finish();
-
-    wrap_dismiss(dialog_body)
+        cancel_btn_state,
+    )
 }
 
 /// 渲染覆盖确认对话框
@@ -517,57 +496,21 @@ fn render_overwrite_confirm(
     confirm_btn_state: MouseStateHandle,
     cancel_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    let sub_color = theme.sub_text_color(theme.background());
-    let ui_font = appearance.ui_font_family();
-    let ui_font_size = appearance.ui_font_size();
-
-    // 标题行
-    let title_bar = render_title_bar("确认覆盖", appearance);
-
     let target_name = target
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
     let desc = format!("目标文件 {} 已存在，是否覆盖？", target_name);
-    let desc_el = Shrinkable::new(
-        1.0,
-        Text::new(desc, ui_font, ui_font_size)
-            .with_color(sub_color.into())
-            .finish(),
-    )
-    .finish();
 
-    let confirm_btn = render_button(
+    render_confirm_dialog(
+        "确认覆盖",
+        &desc,
         "覆盖",
-        true,
-        appearance,
         SftpBrowserAction::ConfirmOverwrite,
+        appearance,
         confirm_btn_state,
-    );
-    let cancel_btn = render_cancel_button(appearance, cancel_btn_state);
-
-    let buttons = Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_main_axis_alignment(MainAxisAlignment::End)
-        .with_spacing(8.0)
-        .with_child(confirm_btn)
-        .with_child(cancel_btn)
-        .finish();
-
-    let content = Flex::column()
-        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-        .with_spacing(12.0)
-        .with_child(title_bar)
-        .with_child(desc_el)
-        .with_child(buttons)
-        .finish();
-
-    let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
-        .with_max_width(DIALOG_MAX_WIDTH)
-        .finish();
-
-    wrap_dismiss(dialog_body)
+        cancel_btn_state,
+    )
 }
 
 /// 渲染对话框（主入口函数）
