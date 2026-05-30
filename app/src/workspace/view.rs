@@ -53,6 +53,7 @@ use crate::ai::{
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::app_state::{
     LeafContents, LeafSnapshot, LeftPanelDisplayedTab, LeftPanelSnapshot, NotebookPaneSnapshot,
+    AppPanelPaneSnapshot,
     PaneNodeSnapshot, PaneUuid, RightPanelSnapshot, SettingsPaneSnapshot, TabSnapshot,
     TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
 };
@@ -6839,6 +6840,24 @@ impl Workspace {
             panes_layout,
             Arc::new(HashMap::new()),
             Some(crate::t!("settings-title")),
+            ctx,
+        );
+    }
+
+    fn open_app_panel_pane(&mut self, ctx: &mut ViewContext<Self>) {
+        use app_panel::nav::AppPanelSection;
+
+        let panes_layout = PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: true,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::AppPanel(AppPanelPaneSnapshot {
+                current_section: AppPanelSection::default(),
+            }),
+        })));
+        self.add_tab_with_pane_layout(
+            panes_layout,
+            Arc::new(HashMap::new()),
+            Some("应用".to_string()),
             ctx,
         );
     }
@@ -14649,6 +14668,11 @@ impl Workspace {
         self.show_settings_with_section(None, ctx);
     }
 
+    fn show_app_panel(&mut self, ctx: &mut ViewContext<Self>) {
+        self.close_all_overlays(ctx);
+        self.open_app_panel_pane(ctx);
+    }
+
     fn show_settings_with_section(
         &mut self,
         section: Option<SettingsSection>,
@@ -16436,7 +16460,12 @@ impl Workspace {
                     .finish(),
             );
         } else {
-            // 去中心化分支:不再渲染 Zap Essentials(灯泡)按钮,只保留设置齿轮。
+            // 去中心化分支:不再渲染 Zap Essentials(灯泡)按钮,只保留应用+设置齿轮。
+            target.add_child(
+                Container::new(self.render_app_panel_button(appearance))
+                    .with_margin_left(TAB_BAR_PADDING_LEFT)
+                    .finish(),
+            );
             target.add_child(
                 Container::new(self.render_settings_button(appearance))
                     .with_margin_left(TAB_BAR_PADDING_LEFT)
@@ -16810,6 +16839,23 @@ impl Workspace {
         .finish();
 
         SavePosition::new(Align::new(button).finish(), USER_AVATAR_BUTTON_POSITION_ID).finish()
+    }
+
+    fn render_app_panel_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+        Align::new(
+            self.render_tab_bar_icon_button(
+                appearance,
+                icons::Icon::Grid,
+                &self.mouse_states.app_panel_icon,
+                WorkspaceAction::ShowAppPanel,
+                "应用".to_string(),
+                self.cached_keybindings[SHOW_SETTINGS_KEYBINDING_NAME].clone(),
+                false,
+                false,
+            )
+            .finish(),
+        )
+        .finish()
     }
 
     fn render_settings_button(&self, appearance: &Appearance) -> Box<dyn Element> {
@@ -18748,6 +18794,7 @@ impl TypedActionView for Workspace {
                 self.show_keyboard_settings(keybinding_name.as_deref(), ctx)
             }
             ShowSettings => self.show_settings(ctx),
+            ShowAppPanel => self.show_app_panel(ctx),
             ShowSettingsPage(section) => self.show_settings_with_section(Some(*section), ctx),
             ShowSettingsPageWithSearch {
                 search_query,

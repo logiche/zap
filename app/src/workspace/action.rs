@@ -176,6 +176,7 @@ pub enum WorkspaceAction {
     ConfigureKeybindingSettings {
         keybinding_name: Option<String>,
     },
+    ShowAppPanel,
     ShowSettings,
     ShowSettingsPage(SettingsSection),
     ShowSettingsPageWithSearch {
@@ -703,6 +704,7 @@ impl WorkspaceAction {
             | DownloadNewVersion
             | ConfigureKeybindingSettings { .. }
             | ExportAllWarpDriveObjects
+            | ShowAppPanel
             | ShowSettings
             | ShowSettingsPage(_)
             | ShowSettingsPageWithSearch { .. }

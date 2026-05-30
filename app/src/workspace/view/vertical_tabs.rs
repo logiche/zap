@@ -2552,6 +2552,7 @@ enum TypedPane<'a> {
     EnvVarCollection,
     // Zap Wave 7-3:`EnvironmentManagement` variant 随 ambient-agent UI 子系统物理删。
     AIFact,
+    AppPanel,
     AIDocument,
     ExecutionProfileEditor,
     Other,
@@ -2596,7 +2597,7 @@ impl TypedPane<'_> {
             TypedPane::AIFact => SummaryPaneKind::AIFact,
             TypedPane::AIDocument => SummaryPaneKind::AIDocument,
             TypedPane::ExecutionProfileEditor => SummaryPaneKind::ExecutionProfileEditor,
-            TypedPane::Other => SummaryPaneKind::Other,
+            TypedPane::AppPanel | TypedPane::Other => SummaryPaneKind::Other,
         }
     }
 
@@ -2627,7 +2628,7 @@ impl TypedPane<'_> {
             TypedPane::ExecutionProfileEditor => {
                 crate::t!("vertical-tabs-pane-kind-execution-profile")
             }
-            TypedPane::Other => crate::t!("vertical-tabs-pane-kind-other"),
+            TypedPane::AppPanel | TypedPane::Other => crate::t!("vertical-tabs-pane-kind-other"),
         }
     }
 
@@ -2649,7 +2650,7 @@ impl TypedPane<'_> {
             | TypedPane::AIFact
             | TypedPane::AIDocument
             | TypedPane::ExecutionProfileEditor
-            | TypedPane::Other => None,
+            | TypedPane::AppPanel | TypedPane::Other => None,
         }
     }
 
@@ -2671,7 +2672,7 @@ impl TypedPane<'_> {
             TypedPane::AIFact => WarpIcon::BookOpen,
             TypedPane::AIDocument => WarpIcon::Compass,
             TypedPane::ExecutionProfileEditor => WarpIcon::Lightning,
-            TypedPane::Other => WarpIcon::File,
+            TypedPane::AppPanel | TypedPane::Other => WarpIcon::File,
         }
     }
 }
@@ -2808,7 +2809,7 @@ fn build_vertical_tabs_summary_data(
             | TypedPane::AIFact
             | TypedPane::AIDocument
             | TypedPane::ExecutionProfileEditor
-            | TypedPane::Other => {
+            | TypedPane::AppPanel | TypedPane::Other => {
                 push_normalized_unique_summary_text(
                     &mut primary_labels,
                     &mut primary_seen,
@@ -2931,7 +2932,7 @@ impl<'a> PaneProps<'a> {
             | TypedPane::AIFact
             | TypedPane::AIDocument
             | TypedPane::ExecutionProfileEditor
-            | TypedPane::Other => {
+            | TypedPane::AppPanel | TypedPane::Other => {
                 non_terminal_search_text_fragments(self.generated_or_tab_title(), &self.subtitle)
             }
         };
@@ -3242,6 +3243,7 @@ impl PaneGroup {
             IPaneType::EnvVarCollection => TypedPane::EnvVarCollection,
             // Zap Wave 7-3:`EnvironmentManagement` arm 随 variant 一同物理删。
             IPaneType::AIFact => TypedPane::AIFact,
+            IPaneType::AppPanel => TypedPane::AppPanel,
             IPaneType::AIDocument => TypedPane::AIDocument,
             IPaneType::ExecutionProfileEditor => TypedPane::ExecutionProfileEditor,
             IPaneType::GetStarted
@@ -5672,7 +5674,7 @@ fn typed_pane_warp_drive_object_type(typed: &TypedPane<'_>) -> Option<DriveObjec
         | TypedPane::Settings
         // Zap Wave 7-3:`TypedPane::EnvironmentManagement` arm 随 variant 物理删。
         | TypedPane::ExecutionProfileEditor
-        | TypedPane::Other => None,
+        | TypedPane::AppPanel | TypedPane::Other => None,
     }
 }
 
@@ -5699,7 +5701,7 @@ fn render_detail_section(
         | TypedPane::Settings
         // Zap Wave 7-3:`TypedPane::EnvironmentManagement` arm 随 variant 物理删。
         | TypedPane::ExecutionProfileEditor
-        | TypedPane::Other => Empty::new().finish(),
+        | TypedPane::AppPanel | TypedPane::Other => Empty::new().finish(),
     }
 }
 pub(super) struct DetailSidecarOverlay {

@@ -1706,6 +1706,21 @@ impl PaneGroup {
                 };
                 Ok((PaneData::new(pane_id), focus))
             }
+            LeafContents::AppPanel(snapshot) => {
+                let pane: Box<dyn AnyPaneContent + 'static> =
+                    Box::new(crate::pane_group::pane::app_panel_pane::AppPanelPane::new(
+                        snapshot.current_section,
+                        ctx.window_id(),
+                        ctx,
+                    ));
+                let pane_id = pane.as_pane().id();
+                pane_contents.insert(pane_id, pane);
+                let focus = InitialFocus {
+                    focused_pane: leaf.is_focused.then_some(pane_id),
+                    active_session: None,
+                };
+                Ok((PaneData::new(pane_id), focus))
+            }
             LeafContents::AIFact(snapshot) => {
                 if !FeatureFlag::AIRules.is_enabled() {
                     return Err(anyhow::anyhow!("AI fact pane not enabled"));

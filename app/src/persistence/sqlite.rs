@@ -45,7 +45,7 @@ use super::model::{
     NewWorkspace, NewWorkspaceTeam, ObjectMetadata, ObjectPermissions, Project, Tab, Window,
     AI_DOCUMENT_PANE_KIND, AI_FACT_PANE_KIND, CODE_PANE_KIND, ENV_VAR_COLLECTION_PANE_KIND,
     EXECUTION_PROFILE_EDITOR_PANE_KIND, MCP_SERVER_PANE_KIND, NOTEBOOK_PANE_KIND,
-    SETTINGS_PANE_KIND, TERMINAL_PANE_KIND, WELCOME_PANE_KIND, WORKFLOW_PANE_KIND,
+    SETTINGS_PANE_KIND, APP_PANEL_PANE_KIND, TERMINAL_PANE_KIND, WELCOME_PANE_KIND, WORKFLOW_PANE_KIND,
 };
 use super::schema;
 use super::{
@@ -64,7 +64,7 @@ use crate::ai::mcp::{
 };
 use crate::app_state::{
     AIFactPaneSnapshot, AmbientAgentPaneSnapshot, CodeReviewPaneSnapshot,
-    EnvVarCollectionPaneSnapshot, LeftPanelSnapshot, RightPanelSnapshot, SettingsPaneSnapshot,
+    AppPanelPaneSnapshot, EnvVarCollectionPaneSnapshot, LeftPanelSnapshot, RightPanelSnapshot, SettingsPaneSnapshot,
     WorkflowPaneSnapshot,
 };
 use crate::auth::AuthStateProvider;
@@ -1259,6 +1259,7 @@ fn save_pane_state(
         LeafContents::Code(_) => CODE_PANE_KIND,
         LeafContents::Workflow(_) => WORKFLOW_PANE_KIND,
         LeafContents::Settings(_) => SETTINGS_PANE_KIND,
+        LeafContents::AppPanel(_) => APP_PANEL_PANE_KIND,
         LeafContents::AIFact(_) => AI_FACT_PANE_KIND,
         LeafContents::CodeReview(_) => CODE_REVIEW_PANE_KIND,
         LeafContents::AmbientAgent(_) => AMBIENT_AGENT_PANE_KIND,
@@ -1433,6 +1434,9 @@ fn save_pane_state(
             diesel::insert_into(schema::settings_panes::dsl::settings_panes)
                 .values(settings_pane)
                 .execute(conn)?;
+        }
+        LeafContents::AppPanel(_app_panel_pane_snapshot) => {
+            // 应用面板使用默认 section 恢复，无需额外保存数据
         }
         LeafContents::AIFact(_ai_fact_pane_snapshot) => {
             let ai_fact = model::NewAIFactPane { id };
@@ -2562,6 +2566,11 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
                     LeafContents::Settings(SettingsPaneSnapshot::Local {
                         current_page,
                         search_query: None,
+                    })
+                }
+                APP_PANEL_PANE_KIND => {
+                    LeafContents::AppPanel(AppPanelPaneSnapshot {
+                        current_section: Default::default(),
                     })
                 }
                 AI_FACT_PANE_KIND => LeafContents::AIFact(AIFactPaneSnapshot::Personal),
