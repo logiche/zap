@@ -127,6 +127,10 @@ pub enum SftpBrowserAction {
     ConfirmMove,
     /// 取消传输任务
     CancelTransfer(usize),
+    /// 切换传输面板可见性
+    ToggleTransferPanel,
+    /// 确认关闭传输面板（取消所有传输并清空记录）
+    ConfirmCloseTransferPanel,
 }
 
 /// SFTP 浏览器视图
@@ -188,6 +192,13 @@ pub struct SftpBrowserView {
     dialog_confirm_btn: MouseStateHandle,
     /// 对话框取消按钮
     dialog_cancel_btn: MouseStateHandle,
+    /// 对话框关闭按钮（标题栏 X 按钮）
+    dialog_close_btn: MouseStateHandle,
+    // ---- 传输面板 ----
+    /// 传输面板是否被用户隐藏
+    transfer_panel_hidden: bool,
+    /// 传输面板关闭按钮
+    transfer_panel_close_btn: MouseStateHandle,
     // ---- 对话框编辑器 ----
     /// 重命名编辑器
     pub(crate) rename_editor: ViewHandle<EditorView>,
@@ -245,6 +256,9 @@ impl SftpBrowserView {
             new_folder_btn: MouseStateHandle::default(),
             dialog_confirm_btn: MouseStateHandle::default(),
             dialog_cancel_btn: MouseStateHandle::default(),
+            dialog_close_btn: MouseStateHandle::default(),
+            transfer_panel_hidden: false,
+            transfer_panel_close_btn: MouseStateHandle::default(),
             rename_editor,
             new_folder_editor,
             search_editor,
@@ -1000,7 +1014,11 @@ impl SftpBrowserView {
 
     /// 渲染传输面板
     fn render_transfers(&self, appearance: &Appearance) -> Box<dyn Element> {
-        super::transfer_panel::render_transfer_panel(&self.transfers, appearance)
+        super::transfer_panel::render_transfer_panel(
+            &self.transfers,
+            appearance,
+            self.transfer_panel_close_btn.clone(),
+        )
     }
 
     /// 执行上传操作（公共逻辑，供拖拽上传和文件选择上传共用）
@@ -1034,6 +1052,7 @@ impl SftpBrowserView {
         if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id) {
             t.state = TransferState::InProgress;
         }
+        self.transfer_panel_hidden = false;
         ctx.notify();
 
         if let Some(sftp) = &self.sftp {
@@ -1123,6 +1142,7 @@ impl SftpBrowserView {
         if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id) {
             t.state = TransferState::InProgress;
         }
+        self.transfer_panel_hidden = false;
         ctx.notify();
 
         if let Some(sftp) = &self.sftp {
@@ -1546,6 +1566,30 @@ impl TypedActionView for SftpBrowserView {
                 }
                 ctx.notify();
             }
+            SftpBrowserAction::ToggleTransferPanel => {
+                let has_active = self.transfers.iter().any(|t| {
+                    matches!(t.state, TransferState::Pending | TransferState::InProgress)
+                });
+                if has_active {
+                    self.dialog = Some(Dialog::CloseTransferPanelConfirm);
+                } else {
+                    self.transfers.clear();
+                    self.transfer_panel_hidden = true;
+                }
+                ctx.notify();
+            }
+            SftpBrowserAction::ConfirmCloseTransferPanel => {
+                for task in &self.transfers {
+                    task.cancel();
+                }
+                for (_, handle) in self.transfer_handles.drain() {
+                    handle.abort();
+                }
+                self.transfers.clear();
+                self.transfer_panel_hidden = true;
+                self.dialog = None;
+                ctx.notify();
+            }
             SftpBrowserAction::DragFilesEnter => {
                 self.is_drag_hovering = true;
                 ctx.notify();
@@ -1649,19 +1693,31 @@ impl View for SftpBrowserView {
             col.add_child(Shrinkable::new(1.0, scrollable).finish());
         }
 
-        // 7. 传输面板
-        if !self.transfers.is_empty() {
-            col.add_child(
-                Container::new(self.render_transfers(appearance))
-                    .with_padding_left(PANEL_PADDING)
-                    .with_padding_right(PANEL_PADDING)
-                    .with_padding_bottom(PANEL_PADDING)
-                    .finish(),
+        // 7. 传输面板（浮动在底部）
+        let mut main_content = col.finish();
+
+        // 8. 传输面板浮动层
+        if !self.transfers.is_empty() && !self.transfer_panel_hidden {
+            let panel_el = Container::new(self.render_transfers(appearance))
+                .with_padding_left(PANEL_PADDING)
+                .with_padding_right(PANEL_PADDING)
+                .with_padding_bottom(PANEL_PADDING)
+                .finish();
+            let mut stack = Stack::new();
+            stack.add_child(main_content);
+            stack.add_positioned_overlay_child(
+                panel_el,
+                OffsetPositioning::offset_from_parent(
+                    Vector2F::new(0.0, 0.0),
+                    ParentOffsetBounds::ParentBySize,
+                    ParentAnchor::BottomLeft,
+                    ChildAnchor::BottomLeft,
+                ),
             );
+            main_content = stack.finish();
         }
 
-        // 8. 右键菜单
-        let mut main_content = col.finish();
+        // 9. 右键菜单
         if let Some(ref cm_state) = self.context_menu {
             let menu_el = super::context_menu::render_context_menu(cm_state, appearance);
             let positioning = OffsetPositioning::offset_from_parent(
@@ -1685,6 +1741,7 @@ impl View for SftpBrowserView {
                 appearance,
                 self.dialog_confirm_btn.clone(),
                 self.dialog_cancel_btn.clone(),
+                self.dialog_close_btn.clone(),
             );
             let centered_dialog = Flex::column()
                 .with_main_axis_size(MainAxisSize::Max)

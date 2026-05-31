@@ -7,7 +7,7 @@
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
-    ParentElement, Radius, SavePosition, Shrinkable, Text,
+    MainAxisSize, MainAxisAlignment, MouseStateHandle, ParentElement, Radius, SavePosition, Shrinkable, Text,
 };
 use warpui::platform::Cursor;
 use warpui::Element;
@@ -191,10 +191,11 @@ fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn 
 
 /// 渲染文件传输面板（主入口）
 ///
-/// 始终显示传输任务列表。
+/// 始终显示传输任务列表，标题栏右侧包含关闭按钮。
 pub fn render_transfer_panel(
     transfers: &[TransferTask],
     appearance: &Appearance,
+    close_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_color = theme.active_ui_text_color();
@@ -209,10 +210,32 @@ pub fn render_transfer_panel(
         .with_color(text_color.into())
         .finish();
 
+    // 关闭按钮
+    let icon_color = theme.sub_text_color(theme.background());
+    let close_btn = Hoverable::new(close_btn_state, move |_| {
+        let icon_el = ConstrainedBox::new(Icon::X.to_warpui_icon(icon_color).finish())
+            .with_width(12.0)
+            .with_height(12.0)
+            .finish();
+        Container::new(icon_el)
+            .with_padding_left(4.0)
+            .with_padding_right(4.0)
+            .with_padding_top(4.0)
+            .with_padding_bottom(4.0)
+            .finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(|ctx, _, _| {
+        ctx.dispatch_typed_action(SftpBrowserAction::ToggleTransferPanel);
+    })
+    .finish();
+
     let header = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_spacing(6.0)
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
         .with_child(title_el)
+        .with_child(close_btn)
         .finish();
 
     let mut col = Flex::column()
@@ -256,6 +279,7 @@ mod tests {
 
     struct TransferPanelTestView {
         transfers: Vec<TransferTask>,
+        close_btn_state: MouseStateHandle,
     }
 
     impl TransferPanelTestView {
@@ -263,6 +287,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 transfers: vec![make_transfer_task(1)],
+                close_btn_state: MouseStateHandle::default(),
             }
         }
     }
@@ -290,7 +315,7 @@ mod tests {
         /// 渲染测试用传输面板
         fn render(&self, app: &AppContext) -> Box<dyn Element> {
             let appearance = Appearance::as_ref(app);
-            render_transfer_panel(&self.transfers, appearance)
+            render_transfer_panel(&self.transfers, appearance, self.close_btn_state.clone())
         }
     }
 

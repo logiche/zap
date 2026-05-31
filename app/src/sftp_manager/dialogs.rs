@@ -47,7 +47,7 @@ fn dialog_shell(content: Box<dyn Element>, appearance: &Appearance) -> Box<dyn E
 /// 渲染标题行（标题 + 关闭按钮）
 ///
 /// 标题使用 Shrinkable 包裹以支持自适应宽度，右侧放置 X 关闭按钮。
-fn render_title_bar(title: &str, appearance: &Appearance) -> Box<dyn Element> {
+fn render_title_bar(title: &str, appearance: &Appearance, close_btn_state: MouseStateHandle) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_color = theme.active_ui_text_color();
     let ui_font = appearance.ui_font_family();
@@ -61,7 +61,7 @@ fn render_title_bar(title: &str, appearance: &Appearance) -> Box<dyn Element> {
     )
     .finish();
 
-    let close_btn = render_icon_close_button(appearance);
+    let close_btn = render_icon_close_button(appearance, close_btn_state);
 
     Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
@@ -73,14 +73,14 @@ fn render_title_bar(title: &str, appearance: &Appearance) -> Box<dyn Element> {
 }
 
 /// 渲染 X 图标关闭按钮
-fn render_icon_close_button(appearance: &Appearance) -> Box<dyn Element> {
+fn render_icon_close_button(appearance: &Appearance, mouse_state: MouseStateHandle) -> Box<dyn Element> {
     let theme = appearance.theme();
     let icon_color = theme.sub_text_color(theme.background());
     let icon_el = ConstrainedBox::new(Icon::X.to_warpui_icon(icon_color).finish())
         .with_width(12.0)
         .with_height(12.0)
         .finish();
-    Hoverable::new(MouseStateHandle::default(), move |_| {
+    Hoverable::new(mouse_state, move |_| {
         Container::new(icon_el)
             .with_padding_left(4.0)
             .with_padding_right(4.0)
@@ -169,13 +169,14 @@ fn render_confirm_dialog(
     appearance: &Appearance,
     confirm_btn_state: MouseStateHandle,
     cancel_btn_state: MouseStateHandle,
+    close_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let sub_color = theme.sub_text_color(theme.background());
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
 
-    let title_bar = render_title_bar(title, appearance);
+    let title_bar = render_title_bar(title, appearance, close_btn_state);
 
     let desc_el = Shrinkable::new(
         1.0,
@@ -228,6 +229,7 @@ fn render_delete_confirm(
     appearance: &Appearance,
     confirm_btn_state: MouseStateHandle,
     cancel_btn_state: MouseStateHandle,
+    close_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let count = paths.len();
     let desc = if count == 1 {
@@ -248,6 +250,7 @@ fn render_delete_confirm(
         appearance,
         confirm_btn_state,
         cancel_btn_state,
+        close_btn_state,
     )
 }
 
@@ -258,6 +261,7 @@ fn render_rename(
     appearance: &Appearance,
     confirm_btn_state: MouseStateHandle,
     cancel_btn_state: MouseStateHandle,
+    close_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let sub_color = theme.sub_text_color(theme.background());
@@ -265,7 +269,7 @@ fn render_rename(
     let ui_font_size = appearance.ui_font_size();
 
     // 标题行
-    let title_bar = render_title_bar("重命名", appearance);
+    let title_bar = render_title_bar("重命名", appearance, close_btn_state);
 
     // 当前名称提示
     let hint = format!("当前名称: {original_name}");
@@ -335,11 +339,12 @@ fn render_create_folder(
     appearance: &Appearance,
     confirm_btn_state: MouseStateHandle,
     cancel_btn_state: MouseStateHandle,
+    close_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
 
     // 标题行
-    let title_bar = render_title_bar("新建文件夹", appearance);
+    let title_bar = render_title_bar("新建文件夹", appearance, close_btn_state);
 
     // 编辑器
     let editor_el = Container::new(
@@ -429,9 +434,10 @@ fn render_file_details(
     entry: &FileEntry,
     appearance: &Appearance,
     cancel_btn_state: MouseStateHandle,
+    close_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     // 标题行
-    let title_bar = render_title_bar("文件详情", appearance);
+    let title_bar = render_title_bar("文件详情", appearance, close_btn_state);
 
     // 类型
     let type_str = match entry.file_type {
@@ -480,6 +486,7 @@ fn render_move_dialog(
     appearance: &Appearance,
     confirm_btn_state: MouseStateHandle,
     cancel_btn_state: MouseStateHandle,
+    close_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let source_name = source
         .file_name()
@@ -499,6 +506,7 @@ fn render_move_dialog(
         appearance,
         confirm_btn_state,
         cancel_btn_state,
+        close_btn_state,
     )
 }
 
@@ -510,6 +518,7 @@ fn render_overwrite_confirm(
     appearance: &Appearance,
     confirm_btn_state: MouseStateHandle,
     cancel_btn_state: MouseStateHandle,
+    close_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let target_name = target
         .file_name()
@@ -525,6 +534,7 @@ fn render_overwrite_confirm(
         appearance,
         confirm_btn_state,
         cancel_btn_state,
+        close_btn_state,
     )
 }
 
@@ -538,26 +548,39 @@ pub fn render_dialog(
     appearance: &Appearance,
     confirm_btn_state: MouseStateHandle,
     cancel_btn_state: MouseStateHandle,
+    close_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     match dialog {
         Dialog::DeleteConfirm { paths, .. } => {
-            render_delete_confirm(paths, appearance, confirm_btn_state, cancel_btn_state)
+            render_delete_confirm(paths, appearance, confirm_btn_state, cancel_btn_state, close_btn_state)
         }
         Dialog::Rename {
             original_name,
             ..
-        } => render_rename(original_name, rename_editor, appearance, confirm_btn_state, cancel_btn_state),
+        } => render_rename(original_name, rename_editor, appearance, confirm_btn_state, cancel_btn_state, close_btn_state),
         Dialog::CreateFolder { .. } => {
-            render_create_folder(new_folder_editor, appearance, confirm_btn_state, cancel_btn_state)
+            render_create_folder(new_folder_editor, appearance, confirm_btn_state, cancel_btn_state, close_btn_state)
         }
         Dialog::FileDetails { entry } => {
-            render_file_details(entry, appearance, cancel_btn_state)
+            render_file_details(entry, appearance, cancel_btn_state, close_btn_state)
         }
         Dialog::Move { source, target_dir } => {
-            render_move_dialog(source, target_dir, appearance, confirm_btn_state, cancel_btn_state)
+            render_move_dialog(source, target_dir, appearance, confirm_btn_state, cancel_btn_state, close_btn_state)
         }
         Dialog::OverwriteConfirm { source, target, file_size } => {
-            render_overwrite_confirm(source, target, *file_size, appearance, confirm_btn_state, cancel_btn_state)
+            render_overwrite_confirm(source, target, *file_size, appearance, confirm_btn_state, cancel_btn_state, close_btn_state)
+        }
+        Dialog::CloseTransferPanelConfirm => {
+            render_confirm_dialog(
+                "关闭传输面板",
+                "有正在进行的传输任务，关闭将中断所有传输并清空记录。确定要关闭吗？",
+                "关闭",
+                SftpBrowserAction::ConfirmCloseTransferPanel,
+                appearance,
+                confirm_btn_state,
+                cancel_btn_state,
+                close_btn_state,
+            )
         }
     }
 }

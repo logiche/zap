@@ -137,6 +137,8 @@ pub enum Dialog {
         file_size: u64,
     },
     FileDetails { entry: FileEntry },
+    /// 关闭传输面板确认（有活跃传输时）
+    CloseTransferPanelConfirm,
 }
 
 /// 连接状态
