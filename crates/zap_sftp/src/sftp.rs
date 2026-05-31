@@ -1,3 +1,10 @@
+//! SFTP 通道操作模块
+//!
+//! 封装 ssh2::Sftp 提供线程安全的远程文件系统操作接口，
+//! 包括文件打开、目录读写、重命名、删除等。
+//! author: logic
+//! date: 2026-05-31
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;

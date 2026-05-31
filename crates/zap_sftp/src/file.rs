@@ -1,3 +1,10 @@
+//! SFTP 远程文件句柄模块
+//!
+//! 封装 ssh2::File 提供远程文件的读写操作，
+//! 支持 Read/Write trait 和流式传输。
+//! author: logic
+//! date: 2026-05-31
+
 use std::io::{Read, Write};
 
 use crate::error::SftpError;

@@ -1,3 +1,10 @@
+//! SFTP 远程目录操作模块
+//!
+//! 提供远程目录读取功能，自动过滤 . 和 .. 条目，
+//! 按目录优先 + 字母序排列。
+//! author: logic
+//! date: 2026-05-31
+
 use std::path::Path;
 
 use crate::error::SftpError;

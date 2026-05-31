@@ -1,3 +1,10 @@
+//! SFTP 协议层错误类型定义
+//!
+//! 定义 SftpError 和 SftpChannelError 两种错误枚举，
+//! 覆盖连接、认证、超时、权限等错误场景。
+//! author: logic
+//! date: 2026-05-31
+
 use thiserror::Error;
 
 /// SFTP 协议级错误
