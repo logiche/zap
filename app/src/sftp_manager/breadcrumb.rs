@@ -75,7 +75,8 @@ pub fn render_breadcrumb(current_path: &PathBuf, appearance: &Appearance) -> Vec
         } else {
             // 非最后一段可点击导航
             let label_for_closure = segment_label.clone();
-            let position_id = format!("sftp_breadcrumb:{}", accumulated.display());
+            let path = accumulated.display();
+            let position_id = format!("sftp_breadcrumb:{path}");
             let hoverable = Hoverable::new(Default::default(), move |_| {
                 let text_el = Text::new_inline(label_for_closure.clone(), ui_font, ui_font_size)
                     .with_color(sub_color.into())

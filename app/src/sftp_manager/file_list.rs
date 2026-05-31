@@ -216,7 +216,7 @@ pub fn render_file_rows(
         let is_selected = selected.contains(&index);
         let mouse_handle = mouse_handles.get(index).cloned().unwrap_or_default();
         let row = render_file_row(entry, index, is_selected, mouse_handle, appearance);
-        let position_id = format!("sftp_row:{}", index);
+        let position_id = format!("sftp_row:{index}");
         let positioned = SavePosition::new(row, &position_id).finish();
         col.add_child(positioned);
     }

@@ -153,7 +153,7 @@ fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn 
         let icon_color = appearance
             .theme()
             .sub_text_color(appearance.theme().background());
-        let position_id = format!("sftp_btn:cancel_transfer:{}", task_id);
+        let position_id = format!("sftp_btn:cancel_transfer:{task_id}");
 
         let cancel_el = Hoverable::new(Default::default(), move |_| {
             let icon_el = ConstrainedBox::new(Icon::X.to_warpui_icon(icon_color).finish())

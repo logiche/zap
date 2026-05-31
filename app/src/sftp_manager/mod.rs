@@ -16,10 +16,12 @@ pub mod transfer_panel;
 pub mod types;
 
 #[cfg(test)]
-mod browser_test;
+#[path = "browser_tests.rs"]
+mod browser_tests;
 
 #[cfg(test)]
-mod browser_integration_test;
+#[path = "browser_integration_tests.rs"]
+mod browser_integration_tests;
 
 #[allow(unused_imports)]
 pub use browser::{SftpBrowserAction, SftpBrowserView};
