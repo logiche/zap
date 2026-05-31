@@ -339,6 +339,13 @@ integration_tests! {
     #[ignore = "Manual test: requires real display for frame capture"]
     test_video_recording,
 
+    // SFTP browser popup tests
+    test_sftp_pane_opens_in_workspace,
+    test_sftp_pane_focus_and_keyboard,
+    test_sftp_pane_close,
+    test_sftp_pane_tab_switch,
+    test_sftp_pane_disconnected_render,
+
     // SFTP browser UI integration tests (mock backend)
     test_sftp_mock_backend_connected,
     test_sftp_toolbar_refresh,
