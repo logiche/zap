@@ -152,6 +152,10 @@ pub fn rename(sftp: &Sftp, old_path: &Path, new_path: &Path) -> Result<(), SftpO
 }
 
 /// 流式上传本地文件到远程
+///
+/// 使用临时文件模式：先上传到 .sftp_partial 后缀的临时路径，
+/// 完成后 rename 到目标路径，取消或失败时清理临时文件，
+/// 避免截断已有远程文件导致数据丢失。
 pub fn upload_file_streaming(
     sftp: &Sftp,
     local_path: &Path,
@@ -163,33 +167,67 @@ pub fn upload_file_streaming(
         fs::File::open(local_path).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
     let total_size = local_file.metadata().map(|m| m.len()).unwrap_or(0);
 
-    let mut remote_file = sftp.open(remote_path, OpenOptions::write())?;
+    // 使用临时路径上传，避免截断已有文件
+    let temp_remote_path = PathBuf::from(format!("{}.sftp_partial", remote_path.display()));
+    let mut remote_file = sftp.open(&temp_remote_path, OpenOptions::write())?;
 
     const CHUNK_SIZE: usize = 32 * 1024;
     let mut buf = vec![0u8; CHUNK_SIZE];
     let mut transferred: u64 = 0;
 
-    loop {
-        if cancel_flag.load(Ordering::SeqCst) {
-            return Err(SftpOpsError::Cancelled);
+    let result = (|| -> Result<(), SftpOpsError> {
+        loop {
+            if cancel_flag.load(Ordering::SeqCst) {
+                return Err(SftpOpsError::Cancelled);
+            }
+            let n = std::io::Read::read(&mut local_file, &mut buf)
+                .map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
+            if n == 0 {
+                break;
+            }
+            remote_file.write_all(&buf[..n])?;
+            transferred += n as u64;
+            if let Some(cb) = progress_cb {
+                cb(transferred, total_size);
+            }
         }
-        let n = std::io::Read::read(&mut local_file, &mut buf)
-            .map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
-        if n == 0 {
-            break;
+        remote_file.flush()?;
+        Ok(())
+    })();
+
+    match &result {
+        Ok(()) => {
+            // 上传成功：rename 临时文件到目标路径
+            let rename_result = sftp.rename(
+                &temp_remote_path,
+                remote_path,
+                zap_sftp::types::RenameOptions {
+                    overwrite: true,
+                    atomic: false,
+                    native: false,
+                },
+            );
+            if let Err(e) = rename_result {
+                // rename 失败时保留远程临时文件，避免数据丢失
+                return Err(SftpOpsError::Operation(
+                    format!("重命名远程临时文件失败: {e}。临时文件: {}", temp_remote_path.display()),
+                ));
+            }
         }
-        remote_file.write_all(&buf[..n])?;
-        transferred += n as u64;
-        if let Some(cb) = progress_cb {
-            cb(transferred, total_size);
+        Err(_) => {
+            // 取消或失败：清理临时文件
+            let _ = sftp.remove_file(&temp_remote_path);
         }
     }
 
-    remote_file.flush()?;
-    Ok(())
+    result
 }
 
 /// 流式下载远程文件到本地
+///
+/// 使用临时文件模式：先写入 .sftp_partial 后缀的临时文件，
+/// 完成后 rename 到目标路径，取消或失败时清理临时文件，
+/// 避免截断已有本地文件导致数据丢失。
 pub fn download_file_streaming(
     sftp: &Sftp,
     remote_path: &Path,
@@ -205,32 +243,53 @@ pub fn download_file_streaming(
         fs::create_dir_all(parent).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
     }
 
+    // 使用临时路径下载，避免截断已有文件
+    let temp_local_path = PathBuf::from(format!("{}.sftp_partial", local_path.display()));
     let mut local_file =
-        fs::File::create(local_path).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
+        fs::File::create(&temp_local_path).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
 
     const CHUNK_SIZE: usize = 32 * 1024;
     let mut buf = vec![0u8; CHUNK_SIZE];
     let mut transferred: u64 = 0;
 
-    loop {
-        if cancel_flag.load(Ordering::SeqCst) {
-            return Err(SftpOpsError::Cancelled);
+    let result = (|| -> Result<(), SftpOpsError> {
+        loop {
+            if cancel_flag.load(Ordering::SeqCst) {
+                return Err(SftpOpsError::Cancelled);
+            }
+            let n = remote_file.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            local_file
+                .write_all(&buf[..n])
+                .map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
+            transferred += n as u64;
+            if let Some(cb) = progress_cb {
+                cb(transferred, total_size);
+            }
         }
-        let n = remote_file.read(&mut buf)?;
-        if n == 0 {
-            break;
+        local_file.flush().map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
+        Ok(())
+    })();
+
+    match &result {
+        Ok(()) => {
+            // 下载成功：rename 临时文件到目标路径
+            if let Err(e) = fs::rename(&temp_local_path, local_path) {
+                // rename 失败时保留本地临时文件，避免数据丢失
+                return Err(SftpOpsError::LocalIo(
+                    format!("重命名失败: {e}。已下载的临时文件保留在: {}", temp_local_path.display()),
+                ));
+            }
         }
-        local_file
-            .write_all(&buf[..n])
-            .map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
-        transferred += n as u64;
-        if let Some(cb) = progress_cb {
-            cb(transferred, total_size);
+        Err(_) => {
+            // 取消或失败：清理临时文件
+            let _ = fs::remove_file(&temp_local_path);
         }
     }
 
-    local_file.flush().map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
-    Ok(())
+    result
 }
 
 /// 递归上传本地目录到远程
@@ -292,6 +351,17 @@ pub fn download_dir_recursive(
     for entry in entries {
         if cancel_flag.load(Ordering::SeqCst) {
             return Err(SftpOpsError::Cancelled);
+        }
+
+        // 路径遍历防护：验证远程服务器返回的文件名安全性
+        if entry.name.is_empty()
+            || entry.name.starts_with('/')
+            || entry.name.starts_with('\\')
+            || entry.name.contains("..")
+            || entry.name.contains('/')
+            || entry.name.contains('\\')
+        {
+            continue;
         }
 
         let local_path = local_dir.join(&entry.name);
@@ -356,7 +426,8 @@ fn build_auth_method(
 fn shellexpand_path(path: &str) -> String {
     if path.starts_with("~/") {
         if let Some(home) = dirs::home_dir() {
-            return format!("{}/{}", home.display(), &path[2..]);
+            let home_path = home.display();
+            return format!("{home_path}/{}", &path[2..]);
         }
     }
     path.to_string()
