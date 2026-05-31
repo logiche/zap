@@ -100,3 +100,186 @@ impl AppPanelViewInner {
         events
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clipboard_history::ClipboardRecord;
+    use chrono::Utc;
+
+    fn test_view() -> AppPanelViewInner {
+        AppPanelViewInner::new()
+    }
+
+    fn test_model() -> ClipboardHistoryModel {
+        ClipboardHistoryModel::new_in_memory().expect("failed to create in-memory model")
+    }
+
+    fn make_record(id: i64, content: &str) -> ClipboardRecord {
+        ClipboardRecord {
+            id,
+            content: content.to_string(),
+            preview: content.chars().take(100).collect(),
+            created_at: Utc::now(),
+        }
+    }
+
+    // --- filtered_records ---
+
+    #[test]
+    fn filtered_records_空查询返回全部() {
+        let view = test_view();
+        let records = vec![make_record(1, "hello"), make_record(2, "world")];
+
+        let filtered = view.filtered_records(&records);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn filtered_records_按关键词过滤() {
+        let mut view = test_view();
+        view.search_query = "rust".to_string();
+
+        let records = vec![
+            make_record(1, "Hello Rust"),
+            make_record(2, "Python code"),
+            make_record(3, "rust programming"),
+        ];
+
+        let filtered = view.filtered_records(&records);
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].id, 1);
+        assert_eq!(filtered[1].id, 3);
+    }
+
+    #[test]
+    fn filtered_records_大小写不敏感() {
+        let mut view = test_view();
+        view.search_query = "HELLO".to_string();
+
+        let records = vec![make_record(1, "hello world")];
+
+        let filtered = view.filtered_records(&records);
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn filtered_records_无匹配返回空() {
+        let mut view = test_view();
+        view.search_query = "xyz".to_string();
+
+        let records = vec![make_record(1, "hello")];
+
+        let filtered = view.filtered_records(&records);
+        assert!(filtered.is_empty());
+    }
+
+    // --- handle_clipboard_action ---
+
+    #[test]
+    fn handle_action_search_query_changed() {
+        let mut view = test_view();
+        let mut model = test_model();
+
+        let events = view.handle_clipboard_action(
+            &ClipboardPageAction::SearchQueryChanged("test".to_string()),
+            &mut model,
+        );
+
+        assert!(events.is_empty());
+        assert_eq!(view.search_query, "test");
+    }
+
+    #[test]
+    fn handle_action_record_clicked_显示toast() {
+        let mut view = test_view();
+        let mut model = test_model();
+
+        model.add_record("hello world".to_string()).expect("add failed");
+        let record_id = model.records()[0].id;
+
+        let events = view.handle_clipboard_action(
+            &ClipboardPageAction::RecordClicked(record_id),
+            &mut model,
+        );
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], AppPanelViewInnerEvent::ShowToast { .. }));
+    }
+
+    #[test]
+    fn handle_action_record_clicked_不存在的id无事件() {
+        let mut view = test_view();
+        let mut model = test_model();
+
+        let events = view.handle_clipboard_action(
+            &ClipboardPageAction::RecordClicked(99999),
+            &mut model,
+        );
+
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn handle_action_record_deleted() {
+        let mut view = test_view();
+        let mut model = test_model();
+
+        model.add_record("to delete".to_string()).expect("add failed");
+        let record_id = model.records()[0].id;
+
+        view.handle_clipboard_action(
+            &ClipboardPageAction::RecordDeleted(record_id),
+            &mut model,
+        );
+
+        assert!(model.records().is_empty());
+    }
+
+    #[test]
+    fn handle_action_clear_all_requested_显示确认弹窗() {
+        let mut view = test_view();
+        let mut model = test_model();
+
+        view.handle_clipboard_action(
+            &ClipboardPageAction::ClearAllRequested,
+            &mut model,
+        );
+
+        assert!(view.confirm_clear_shown);
+    }
+
+    #[test]
+    fn handle_action_clear_all_confirmed_清空并关闭弹窗() {
+        let mut view = test_view();
+        let mut model = test_model();
+
+        model.add_record("a".to_string()).expect("add failed");
+        view.confirm_clear_shown = true;
+
+        let events = view.handle_clipboard_action(
+            &ClipboardPageAction::ClearAllConfirmed,
+            &mut model,
+        );
+
+        assert!(model.records().is_empty());
+        assert!(!view.confirm_clear_shown);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], AppPanelViewInnerEvent::ShowToast { .. }));
+    }
+
+    #[test]
+    fn handle_action_clear_all_cancelled_关闭弹窗() {
+        let mut view = test_view();
+        let mut model = test_model();
+
+        view.confirm_clear_shown = true;
+
+        view.handle_clipboard_action(
+            &ClipboardPageAction::ClearAllCancelled,
+            &mut model,
+        );
+
+        assert!(!view.confirm_clear_shown);
+    }
+}

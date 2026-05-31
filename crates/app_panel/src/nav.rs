@@ -24,3 +24,25 @@ impl AppPanelSection {
         vec![AppPanelSection::Clipboard]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_为clipboard() {
+        assert_eq!(AppPanelSection::default(), AppPanelSection::Clipboard);
+    }
+
+    #[test]
+    fn label_返回正确名称() {
+        assert_eq!(AppPanelSection::Clipboard.label(), "剪贴板");
+    }
+
+    #[test]
+    fn all_包含clipboard() {
+        let all = AppPanelSection::all();
+        assert_eq!(all.len(), 1);
+        assert!(all.contains(&AppPanelSection::Clipboard));
+    }
+}

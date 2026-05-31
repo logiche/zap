@@ -38,6 +38,26 @@ pub fn run_integration_test(name: &str) -> Result<(), String> {
                 || k == "XDG_RUNTIME_DIR"
                 // Propagate XAUTHORITY so we can run headless tests using xvfb.
                 || k == "XAUTHORITY"
+                // Windows 系统关键环境变量
+                || cfg!(windows) && (
+                    k == "SYSTEMROOT"
+                    || k == "COMSPEC"
+                    || k == "TEMP"
+                    || k == "TMP"
+                    || k == "USERPROFILE"
+                    || k == "HOMEDRIVE"
+                    || k == "HOMEPATH"
+                    || k == "APPDATA"
+                    || k == "LOCALAPPDATA"
+                    || k == "PROGRAMFILES"
+                    || k == "PROGRAMFILES(X86)"
+                    || k == "PROGRAMDATA"
+                    || k == "OS"
+                    || k == "PROCESSOR_ARCHITECTURE"
+                    || k == "PATHEXT"
+                    || k == "PSMODULEPATH"
+                    || k == "ALLUSERSPROFILE"
+                )
         });
         keep_going = match Command::new(env!("CARGO_BIN_EXE_integration"))
             .arg(name)
@@ -110,9 +130,10 @@ macro_rules! integration_tests {
             // ignored twice, once via arguments passed to the macro and once
             // below.
             #[allow(unused_attributes)]
-            // For right now, we only want to run integration tests on macOS
-            // and Linux (iff the run_on_linux feature is enabled).
-            #[cfg_attr(not(any(target_os = "macos", feature = "run_on_linux")), ignore)]
+            // For right now, we only want to run integration tests on macOS,
+            // Linux (iff the run_on_linux feature is enabled), and
+            // Windows (iff the run_on_windows feature is enabled).
+            #[cfg_attr(not(any(target_os = "macos", all(target_os = "windows", feature = "run_on_windows"), feature = "run_on_linux")), ignore)]
             #[test]
             fn $name() -> Result<(), String> {
                 $crate::common::run_integration_test(stringify!($name))

@@ -83,8 +83,15 @@ pub fn main() -> Result<()> {
                 "Integration test binary should have set an ORIGINAL_HOME environment variable",
             );
             assert_ne!(home, original_home, "HOME should not be the same as ORIGINAL_HOME!");
-        } else {
-            unimplemented!("Need to add support for hermetic integration tests for the current platform!");
+        } else if #[cfg(windows)] {
+            let userprofile = std::env::var("USERPROFILE")
+                .expect("Should have a value for USERPROFILE");
+            let original_userprofile = std::env::var("ORIGINAL_USERPROFILE")
+                .expect("Integration test binary should have set ORIGINAL_USERPROFILE");
+            assert_ne!(
+                userprofile, original_userprofile,
+                "USERPROFILE should not be the same as ORIGINAL_USERPROFILE!"
+            );
         }
     }
 
@@ -152,6 +159,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_long_running_block_height_updated);
     register_test!(test_unnecessary_resizes);
     register_test!(test_open_and_close_settings);
+    register_test!(test_open_and_close_app_panel);
+    register_test!(test_reopen_app_panel);
     register_test!(test_suggestions_menu_positioning);
     register_test!(test_open_and_close_theme_creator_modal);
     register_test!(test_removing_tabs_out_of_order);

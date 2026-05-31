@@ -149,3 +149,121 @@ impl ClipboardRow {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_db() -> ClipboardDb {
+        ClipboardDb::open_in_memory().expect("failed to open in-memory db")
+    }
+
+    #[test]
+    fn insert_插入并查询记录() {
+        let mut db = test_db();
+
+        let record = db.insert("hello world").expect("insert failed");
+
+        assert_eq!(record.content, "hello world");
+        assert_eq!(record.preview, "hello world");
+        assert!(record.id > 0);
+    }
+
+    #[test]
+    fn load_all_空数据库返回空列表() {
+        let mut db = test_db();
+
+        let records = db.load_all().expect("load_all failed");
+        assert!(records.is_empty());
+    }
+
+    #[test]
+    fn load_all_按时间倒序返回() {
+        let mut db = test_db();
+
+        let r1 = db.insert("first").expect("insert failed");
+        let r2 = db.insert("second").expect("insert failed");
+        let r3 = db.insert("third").expect("insert failed");
+
+        let records = db.load_all().expect("load_all failed");
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].id, r3.id);
+        assert_eq!(records[1].id, r2.id);
+        assert_eq!(records[2].id, r1.id);
+    }
+
+    #[test]
+    fn delete_删除存在的记录() {
+        let mut db = test_db();
+
+        let record = db.insert("to delete").expect("insert failed");
+        let deleted = db.delete(record.id).expect("delete failed");
+
+        assert!(deleted);
+        let records = db.load_all().expect("load_all failed");
+        assert!(records.is_empty());
+    }
+
+    #[test]
+    fn delete_删除不存在的记录返回false() {
+        let mut db = test_db();
+
+        let deleted = db.delete(99999).expect("delete failed");
+        assert!(!deleted);
+    }
+
+    #[test]
+    fn clear_all_清空所有记录() {
+        let mut db = test_db();
+
+        db.insert("a").expect("insert failed");
+        db.insert("b").expect("insert failed");
+        db.insert("c").expect("insert failed");
+
+        db.clear_all().expect("clear_all failed");
+        let records = db.load_all().expect("load_all failed");
+        assert!(records.is_empty());
+    }
+
+    #[test]
+    fn evict_oldest_未超上限不淘汰() {
+        let mut db = test_db();
+
+        db.insert("a").expect("insert failed");
+        db.insert("b").expect("insert failed");
+
+        let evicted = db.evict_oldest(5).expect("evict failed");
+        assert!(evicted.is_empty());
+
+        let records = db.load_all().expect("load_all failed");
+        assert_eq!(records.len(), 2);
+    }
+
+    #[test]
+    fn evict_oldest_超上限淘汰最旧记录() {
+        let mut db = test_db();
+
+        let r1 = db.insert("first").expect("insert failed");
+        let r2 = db.insert("second").expect("insert failed");
+        let _r3 = db.insert("third").expect("insert failed");
+
+        let evicted = db.evict_oldest(2).expect("evict failed");
+        assert_eq!(evicted, vec![r1.id]);
+
+        let records = db.load_all().expect("load_all failed");
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().all(|r| r.id != r1.id));
+        assert!(records.iter().any(|r| r.id == r2.id));
+    }
+
+    #[test]
+    fn insert_生成正确的preview() {
+        let mut db = test_db();
+
+        let long = "x".repeat(150);
+        let record = db.insert(&long).expect("insert failed");
+
+        assert_eq!(record.preview.chars().count(), 101); // 100 + …
+        assert!(record.preview.ends_with('…'));
+    }
+}

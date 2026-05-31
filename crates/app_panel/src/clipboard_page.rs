@@ -53,3 +53,48 @@ pub fn format_time(dt: &DateTime<Utc>) -> String {
         dt.format("%m-%d %H:%M").to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+
+    #[test]
+    fn format_time_刚刚() {
+        let now = Utc::now();
+        assert_eq!(format_time(&now), "刚刚");
+    }
+
+    #[test]
+    fn format_time_59秒前显示刚刚() {
+        let dt = Utc::now() - Duration::seconds(59);
+        assert_eq!(format_time(&dt), "刚刚");
+    }
+
+    #[test]
+    fn format_time_分钟前() {
+        let dt = Utc::now() - Duration::minutes(5);
+        assert_eq!(format_time(&dt), "5分钟前");
+    }
+
+    #[test]
+    fn format_time_小时前() {
+        let dt = Utc::now() - Duration::hours(3);
+        assert_eq!(format_time(&dt), "3小时前");
+    }
+
+    #[test]
+    fn format_time_天前() {
+        let dt = Utc::now() - Duration::days(2);
+        assert_eq!(format_time(&dt), "2天前");
+    }
+
+    #[test]
+    fn format_time_超过一周显示日期() {
+        let dt = Utc::now() - Duration::days(10);
+        let result = format_time(&dt);
+        // 格式为 "MM-DD HH:MM"
+        assert!(result.contains('-'));
+        assert!(result.contains(':'));
+    }
+}

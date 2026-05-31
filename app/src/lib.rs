@@ -1080,6 +1080,15 @@ fn initialize_app(
     // SshManager 操作可能撞 missing-table。
     warp_ssh_manager::set_database_path(persistence::database_file_path());
 
+    // 剪贴板历史 Model 使用独立数据库文件
+    let clipboard_db_path = warp_core::paths::secure_state_dir()
+        .unwrap_or_else(warp_core::paths::state_dir)
+        .join("clipboard_history.db");
+    ctx.add_singleton_model(move |_ctx| {
+        clipboard_history::ClipboardHistoryModel::new(&clipboard_db_path)
+            .expect("Failed to initialize ClipboardHistoryModel")
+    });
+
     let persistence_writer = PersistenceWriter::new(writer_handles);
 
     let model_event_sender = persistence_writer.sender();

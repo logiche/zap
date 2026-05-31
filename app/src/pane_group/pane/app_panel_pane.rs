@@ -7,27 +7,35 @@
 
 use app_panel::clipboard_page::ClipboardPageAction;
 use app_panel::nav::AppPanelSection;
-use app_panel::{AppPanelViewInner, AppPanelViewInnerEvent};
+use app_panel::AppPanelViewInner;
 use clipboard_history::ClipboardHistoryModel;
 use pathfinder_color::ColorU;
-use settings::Setting;
+use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    Border, ConstrainedBox, Container, CrossAxisAlignment,
-    Element, Fill, Flex, Hoverable, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Shrinkable, Text,
+    Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Dismiss, Element, Expanded, Fill, Flex, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
-    AppContext, Entity, ModelHandle, SingletonEntity, SingletonEntity as _, TypedActionView,
+    AppContext, Entity, ModelHandle, SingletonEntity as _, TypedActionView,
     View, ViewContext, ViewHandle, WindowId,
 };
 
 use crate::app_state::{AppPanelPaneSnapshot, LeafContents};
 use crate::appearance::Appearance;
+use crate::editor::{EditorView, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::IPaneType;
 use crate::pane_group::pane::view;
+use crate::search_bar::SearchBar;
+use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::ui_components::icons;
+use crate::view_components::action_button::{ActionButton, DangerPrimaryTheme, NakedTheme};
+use crate::view_components::DismissibleToast;
+use crate::ToastStack;
 
 use super::{
     BackingView, DetachType, PaneConfiguration, PaneContent, PaneEvent, PaneGroup,
@@ -53,6 +61,16 @@ pub struct AppPanelView {
     pane_configuration: ModelHandle<PaneConfiguration>,
     focus_handle: Option<PaneFocusHandle>,
     nav_hover_states: Vec<MouseStateHandle>,
+    /// 搜索输入框
+    search_editor: ViewHandle<EditorView>,
+    /// 搜索栏包装
+    search_bar: ViewHandle<SearchBar>,
+    /// 清空按钮 hover 状态
+    clear_all_hover: MouseStateHandle,
+    /// 确认弹窗取消按钮
+    confirm_cancel_button: ViewHandle<ActionButton>,
+    /// 确认弹窗清空按钮
+    confirm_delete_button: ViewHandle<ActionButton>,
 }
 
 impl Entity for AppPanelView {
@@ -70,12 +88,18 @@ impl View for AppPanelView {
         let ui_font_family = appearance.ui_font_family();
         let ui_font_size = appearance.ui_font_size();
 
-        // 获取记录
+        // 从搜索编辑器读取实时文本
+        let search_term = self.search_editor.as_ref(ctx).buffer_text(ctx);
         let model = ClipboardHistoryModel::handle(ctx);
         let records = model.as_ref(ctx).records();
-        let filtered = self.inner.filtered_records(records);
+        let filtered: Vec<_> = if search_term.is_empty() {
+            records.iter().collect()
+        } else {
+            let query = search_term.to_lowercase();
+            records.iter().filter(|r| r.content.to_lowercase().contains(&query)).collect()
+        };
 
-        // 侧边导航
+        // --- 侧边导航 ---
         let mut nav_column = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Min);
@@ -87,7 +111,7 @@ impl View for AppPanelView {
             let section = *section;
             let font_family = ui_font_family;
             let font_size = ui_font_size;
-            let fg: pathfinder_color::ColorU = theme.foreground().into_solid();
+            let fg: ColorU = theme.foreground().into_solid();
             let active_bg: Fill = Fill::Solid(theme.active_ui_detail().into_solid());
             let hover_bg: Fill = Fill::Solid(theme.nonactive_ui_detail().into_solid());
             let no_bg: Fill = Fill::Solid(ColorU::transparent_black());
@@ -131,11 +155,18 @@ impl View for AppPanelView {
         .with_width(200.)
         .finish();
 
-        // 剪贴板记录列表
-        let fg: pathfinder_color::ColorU = theme.foreground().into_solid();
-        let detail: pathfinder_color::ColorU = theme.nonactive_ui_text_color().into_solid();
-        let hover_bg: Fill = Fill::Solid(theme.nonactive_ui_detail().into_solid());
-        let no_bg: Fill = Fill::Solid(ColorU::transparent_black());
+        // --- 搜索框 ---
+        let search_bar_element = Container::new(ChildView::new(&self.search_bar).finish())
+            .with_margin_bottom(8.)
+            .finish();
+
+        // --- 剪贴板记录列表 ---
+        let fg: ColorU = theme.foreground().into_solid();
+        let detail: ColorU = theme.nonactive_ui_text_color().into_solid();
+        let row_hover_bg: Fill = Fill::Solid(theme.nonactive_ui_detail().into_solid());
+        let row_no_bg: Fill = Fill::Solid(ColorU::transparent_black());
+        let del_hover_bg: Fill = Fill::Solid(theme.nonactive_ui_detail().into_solid());
+        let del_no_bg: Fill = Fill::Solid(ColorU::transparent_black());
 
         let mut records_column = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -149,7 +180,7 @@ impl View for AppPanelView {
             let font_size = ui_font_size;
 
             let row = Hoverable::new(MouseStateHandle::default(), move |state| {
-                let bg = if state.is_hovered() { hover_bg } else { no_bg };
+                let bg = if state.is_hovered() { row_hover_bg } else { row_no_bg };
 
                 let preview = Text::new(preview_str.clone(), font_family, font_size)
                     .with_color(fg)
@@ -158,17 +189,52 @@ impl View for AppPanelView {
                     .with_color(detail)
                     .finish();
 
-                Container::new(
-                    Flex::row()
-                        .with_main_axis_alignment(MainAxisAlignment::Start)
-                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                        .with_child(preview)
-                        .with_child(time)
-                        .finish(),
-                )
-                .with_uniform_padding(8.)
-                .with_background(bg)
-                .finish()
+                // 删除按钮（hover 时显示）
+                let delete_btn = if state.is_hovered() {
+                    let del_id = record_id;
+                    Some(
+                        Hoverable::new(MouseStateHandle::default(), move |del_state| {
+                            let del_bg = if del_state.is_hovered() { del_hover_bg } else { del_no_bg };
+                            Container::new(
+                                ConstrainedBox::new(
+                                    icons::Icon::X.to_warpui_icon(detail.into()).finish()
+                                ).with_width(14.).with_height(14.).finish()
+                            )
+                            .with_background(del_bg)
+                            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.)))
+                            .finish()
+                        })
+                        .with_cursor(Cursor::PointingHand)
+                        .on_click(move |ctx, _, _| {
+                            ctx.dispatch_typed_action(AppPanelAction::Clipboard(
+                                ClipboardPageAction::RecordDeleted(del_id),
+                            ));
+                        })
+                        .finish()
+                    )
+                } else {
+                    None
+                };
+
+                let mut row_content = Flex::row()
+                    .with_main_axis_alignment(MainAxisAlignment::Start)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_child(
+                        Expanded::new(1., Flex::column()
+                            .with_child(preview)
+                            .with_child(time)
+                            .finish()
+                        ).finish()
+                    );
+
+                if let Some(del) = delete_btn {
+                    row_content = row_content.with_child(del);
+                }
+
+                Container::new(row_content.finish())
+                    .with_uniform_padding(8.)
+                    .with_background(bg)
+                    .finish()
             })
             .with_cursor(Cursor::PointingHand)
             .on_click(move |ctx, _, _| {
@@ -181,16 +247,97 @@ impl View for AppPanelView {
             records_column = records_column.with_child(row);
         }
 
-        let content = Container::new(records_column.finish())
-            .with_uniform_padding(16.)
-            .finish();
+        // --- 全部清空按钮 ---
+        let danger_fg: ColorU = theme.ui_error_color();
+        let clear_hover_state = self.clear_all_hover.clone();
+        let clear_font_family = ui_font_family;
+        let clear_font_size = ui_font_size;
+        let clear_border = theme.outline();
 
-        Flex::row()
+        let clear_all_button = Hoverable::new(clear_hover_state, move |state| {
+            let clear_hover_bg: Fill = Fill::Solid(theme.nonactive_ui_detail().into_solid());
+            let clear_no_bg: Fill = Fill::Solid(ColorU::transparent_black());
+            let bg = if state.is_hovered() { clear_hover_bg } else { clear_no_bg };
+            let clear_text = Text::new("全部清空", clear_font_family, clear_font_size)
+                .with_color(danger_fg)
+                .finish();
+            Container::new(
+                Flex::row()
+                    .with_main_axis_alignment(MainAxisAlignment::Center)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_child(clear_text)
+                    .finish(),
+            )
+            .with_uniform_padding(8.)
+            .with_background(bg)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+            .with_border(Border::all(1.).with_border_fill(clear_border))
+            .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(AppPanelAction::Clipboard(
+                ClipboardPageAction::ClearAllRequested,
+            ));
+        })
+        .finish();
+
+        // --- 内容区布局 ---
+        let content = Container::new(
+            Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_child(search_bar_element)
+                .with_child(records_column.finish())
+                .with_child(
+                    Container::new(clear_all_button)
+                        .with_margin_top(8.)
+                        .finish(),
+                )
+                .finish(),
+        )
+        .with_uniform_padding(16.)
+        .finish();
+
+        let main_layout = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Max)
             .with_child(Shrinkable::new(1., sidebar).finish())
             .with_child(Shrinkable::new(1., content).finish())
-            .finish()
+            .finish();
+
+        // --- 确认清空弹窗 ---
+        if self.inner.confirm_clear_shown {
+            let dialog = Dialog::new(
+                "确认清空".to_string(),
+                Some("将永久删除所有剪贴板历史记录，此操作无法撤销。".to_string()),
+                dialog_styles(appearance),
+            )
+            .with_bottom_row_child(ChildView::new(&self.confirm_cancel_button).finish())
+            .with_bottom_row_child(
+                Container::new(ChildView::new(&self.confirm_delete_button).finish())
+                    .with_margin_left(12.)
+                    .finish(),
+            )
+            .with_width(400.)
+            .build()
+            .finish();
+
+            let overlay = Dismiss::new(dialog)
+                .prevent_interaction_with_other_elements()
+                .on_dismiss(|ctx, _| {
+                    ctx.dispatch_typed_action(AppPanelAction::Clipboard(
+                        ClipboardPageAction::ClearAllCancelled,
+                    ));
+                })
+                .finish();
+
+            let mut stack = Stack::new();
+            stack.add_child(main_layout);
+            stack.add_child(overlay);
+            stack.finish()
+        } else {
+            main_layout
+        }
     }
 }
 
@@ -204,11 +351,47 @@ impl TypedActionView for AppPanelView {
                 ctx.notify();
             }
             AppPanelAction::Clipboard(clip_action) => {
-                let model = ClipboardHistoryModel::handle(ctx);
-                model.update(ctx, |model, _ctx| {
-                    let _events = self.inner.handle_clipboard_action(clip_action, model);
-                });
-                ctx.notify();
+                match clip_action {
+                    ClipboardPageAction::RecordClicked(id) => {
+                        let model = ClipboardHistoryModel::handle(ctx);
+                        if let Some(record) = model.as_ref(ctx).records().iter().find(|r| r.id == *id) {
+                            let content = record.content.clone();
+                            // 写入系统剪贴板
+                            ctx.clipboard().write(ClipboardContent::plain_text(content.clone()));
+                            // 显示 toast
+                            let preview = &content[..content.len().min(50)];
+                            let window_id = ctx.window_id();
+                            ToastStack::handle(ctx).update(ctx, |stack, ctx| {
+                                stack.add_ephemeral_toast(
+                                    DismissibleToast::success(format!("已复制: {}", preview)),
+                                    window_id, ctx,
+                                );
+                            });
+                        }
+                        ctx.notify();
+                    }
+                    ClipboardPageAction::ClearAllConfirmed => {
+                        let model = ClipboardHistoryModel::handle(ctx);
+                        model.update(ctx, |model, _ctx| {
+                            let _ = self.inner.handle_clipboard_action(clip_action, model);
+                        });
+                        let window_id = ctx.window_id();
+                        ToastStack::handle(ctx).update(ctx, |stack, ctx| {
+                            stack.add_ephemeral_toast(
+                                DismissibleToast::success("已清空全部剪贴板历史".to_string()),
+                                window_id, ctx,
+                            );
+                        });
+                        ctx.notify();
+                    }
+                    _ => {
+                        let model = ClipboardHistoryModel::handle(ctx);
+                        model.update(ctx, |model, _ctx| {
+                            let _ = self.inner.handle_clipboard_action(clip_action, model);
+                        });
+                        ctx.notify();
+                    }
+                }
             }
         }
     }
@@ -281,7 +464,44 @@ impl AppPanelPane {
             ctx.add_model(|_ctx| PaneConfiguration::new("应用"));
 
         let pane_config_clone = pane_configuration.clone();
-        let app_panel_view = ctx.add_typed_action_view(|ctx| {
+
+        // 创建搜索编辑器 + 搜索栏（参照 list_page.rs 模式）
+        let search_editor_text = TextOptions::ui_text(None, Appearance::as_ref(ctx));
+        let search_editor = ctx.add_typed_action_view(|ctx| {
+            EditorView::single_line(SingleLineEditorOptions {
+                text: search_editor_text,
+                propagate_and_no_op_vertical_navigation_keys:
+                    PropagateAndNoOpNavigationKeys::Always,
+                ..Default::default()
+            }, ctx)
+        });
+        ctx.subscribe_to_view(&search_editor, |_, _, _, ctx| {
+            ctx.notify();
+        });
+        search_editor.update(ctx, |editor, ctx| {
+            editor.clear_buffer_and_reset_undo_stack(ctx);
+            editor.set_placeholder_text("搜索剪贴板记录...", ctx);
+        });
+        let search_bar = ctx.add_typed_action_view(|_| SearchBar::new(search_editor.clone()));
+
+        // 创建确认弹窗按钮
+        let confirm_cancel_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("取消", NakedTheme).on_click(|ctx| {
+                ctx.dispatch_typed_action(AppPanelAction::Clipboard(
+                    ClipboardPageAction::ClearAllCancelled,
+                ));
+            })
+        });
+        let confirm_delete_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("清空", DangerPrimaryTheme).on_click(|ctx| {
+                ctx.dispatch_typed_action(AppPanelAction::Clipboard(
+                    ClipboardPageAction::ClearAllConfirmed,
+                ));
+            })
+        });
+        let clear_all_hover = MouseStateHandle::default();
+
+        let app_panel_view = ctx.add_typed_action_view(|_ctx| {
             AppPanelView {
                 inner: AppPanelViewInner {
                     current_section: section,
@@ -291,7 +511,18 @@ impl AppPanelPane {
                 pane_configuration: pane_config_clone,
                 focus_handle: None,
                 nav_hover_states,
+                search_editor,
+                search_bar,
+                clear_all_hover,
+                confirm_cancel_button,
+                confirm_delete_button,
             }
+        });
+
+        // 启动剪贴板轮询
+        let model = ClipboardHistoryModel::handle(ctx);
+        model.update(ctx, |model, ctx| {
+            model.start_watching(ctx);
         });
 
         Self::from_view(app_panel_view, ctx)
@@ -321,9 +552,16 @@ impl PaneContent for AppPanelPane {
     fn detach(
         &self,
         _group: &PaneGroup,
-        _detach_type: DetachType,
+        detach_type: DetachType,
         ctx: &mut ViewContext<PaneGroup>,
     ) {
+        // 只在关闭时停止轮询，移动时保持
+        if matches!(detach_type, DetachType::Closed | DetachType::HiddenForClose) {
+            let model = ClipboardHistoryModel::handle(ctx);
+            model.update(ctx, |model, _ctx| {
+                model.stop_watching();
+            });
+        }
         ctx.unsubscribe_to_view(&self.view);
     }
 

@@ -8,12 +8,14 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 arboard = { workspace = true }
+async-channel.workspace = true
 chrono.workspace = true
 diesel = { workspace = true, features = ["chrono", "sqlite"] }
 libsqlite3-sys = { version = "0.33.0", features = ["bundled"] }
 log.workspace = true
 serde.workspace = true
 warpui.workspace = true
+windows.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
