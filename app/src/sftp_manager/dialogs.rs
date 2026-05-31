@@ -235,9 +235,9 @@ fn render_delete_confirm(
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| paths[0].display().to_string());
-        format!("确定要删除 \"{}\" 吗？此操作不可撤销。", name)
+        format!("确定要删除 \"{name}\" 吗？此操作不可撤销。")
     } else {
-        format!("确定要删除 {} 个项目吗？此操作不可撤销。", count)
+        format!("确定要删除 {count} 个项目吗？此操作不可撤销。")
     };
 
     render_confirm_dialog(
@@ -268,7 +268,7 @@ fn render_rename(
     let title_bar = render_title_bar("重命名", appearance);
 
     // 当前名称提示
-    let hint = format!("当前名称: {}", original_name);
+    let hint = format!("当前名称: {original_name}");
     let hint_el = Shrinkable::new(
         1.0,
         Text::new(hint, ui_font, ui_font_size)
@@ -506,6 +506,7 @@ fn render_move_dialog(
 fn render_overwrite_confirm(
     _source: &PathBuf,
     target: &PathBuf,
+    _file_size: u64,
     appearance: &Appearance,
     confirm_btn_state: MouseStateHandle,
     cancel_btn_state: MouseStateHandle,
@@ -514,7 +515,7 @@ fn render_overwrite_confirm(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-    let desc = format!("目标文件 {} 已存在，是否覆盖？", target_name);
+    let desc = format!("目标文件 {target_name} 已存在，是否覆盖？");
 
     render_confirm_dialog(
         "确认覆盖",
@@ -539,7 +540,7 @@ pub fn render_dialog(
     cancel_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     match dialog {
-        Dialog::DeleteConfirm { paths } => {
+        Dialog::DeleteConfirm { paths, .. } => {
             render_delete_confirm(paths, appearance, confirm_btn_state, cancel_btn_state)
         }
         Dialog::Rename {
@@ -555,8 +556,8 @@ pub fn render_dialog(
         Dialog::Move { source, target_dir } => {
             render_move_dialog(source, target_dir, appearance, confirm_btn_state, cancel_btn_state)
         }
-        Dialog::OverwriteConfirm { source, target } => {
-            render_overwrite_confirm(source, target, appearance, confirm_btn_state, cancel_btn_state)
+        Dialog::OverwriteConfirm { source, target, file_size } => {
+            render_overwrite_confirm(source, target, *file_size, appearance, confirm_btn_state, cancel_btn_state)
         }
     }
 }

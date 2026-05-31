@@ -8,7 +8,10 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+
+use dunce;
 
 use super::sftp_ops::{self, ProgressCallback, SftpOpsError};
 use super::types::{FileEntry, FileEntryType};
@@ -42,6 +45,7 @@ pub trait SftpBackend: Send + Sync {
         local_path: &Path,
         remote_path: &Path,
         progress_cb: Option<&ProgressCallback>,
+        cancel_flag: Option<&AtomicBool>,
     ) -> Result<(), SftpOpsError>;
 
     /// 流式下载远程文件到本地
@@ -50,6 +54,7 @@ pub trait SftpBackend: Send + Sync {
         remote_path: &Path,
         local_path: &Path,
         progress_cb: Option<&ProgressCallback>,
+        cancel_flag: Option<&AtomicBool>,
     ) -> Result<(), SftpOpsError>;
 }
 
@@ -114,9 +119,9 @@ impl SftpBackend for LiveSftpBackend {
         let perms = &metadata.permissions;
         let permissions = Some(format!(
             "{}{}{}",
-            sftp_ops_rwx(perms.owner_read, perms.owner_write, perms.owner_exec),
-            sftp_ops_rwx(perms.group_read, perms.group_write, perms.group_exec),
-            sftp_ops_rwx(perms.other_read, perms.other_write, perms.other_exec),
+            sftp_ops::bool_to_rwx(perms.owner_read, perms.owner_write, perms.owner_exec),
+            sftp_ops::bool_to_rwx(perms.group_read, perms.group_write, perms.group_exec),
+            sftp_ops::bool_to_rwx(perms.other_read, perms.other_write, perms.other_exec),
         ));
         let name = path
             .file_name()
@@ -137,8 +142,11 @@ impl SftpBackend for LiveSftpBackend {
         local_path: &Path,
         remote_path: &Path,
         progress_cb: Option<&ProgressCallback>,
+        cancel_flag: Option<&AtomicBool>,
     ) -> Result<(), SftpOpsError> {
-        sftp_ops::upload_file_streaming(&self.sftp, local_path, remote_path, progress_cb)
+        static NEVER_CANCEL: AtomicBool = AtomicBool::new(false);
+        let flag = cancel_flag.unwrap_or(&NEVER_CANCEL);
+        sftp_ops::upload_file_streaming(&self.sftp, local_path, remote_path, progress_cb, flag)
     }
 
     fn download_file(
@@ -146,19 +154,14 @@ impl SftpBackend for LiveSftpBackend {
         remote_path: &Path,
         local_path: &Path,
         progress_cb: Option<&ProgressCallback>,
+        cancel_flag: Option<&AtomicBool>,
     ) -> Result<(), SftpOpsError> {
-        sftp_ops::download_file_streaming(&self.sftp, remote_path, local_path, progress_cb)
+        static NEVER_CANCEL: AtomicBool = AtomicBool::new(false);
+        let flag = cancel_flag.unwrap_or(&NEVER_CANCEL);
+        sftp_ops::download_file_streaming(&self.sftp, remote_path, local_path, progress_cb, flag)
     }
 }
 
-/// 将读/写/执行布尔值转换为 rwx 权限字符串（复制自 sftp_ops 以避免可见性问题）
-fn sftp_ops_rwx(read: bool, write: bool, exec: bool) -> String {
-    let mut s = String::with_capacity(3);
-    s.push(if read { 'r' } else { '-' });
-    s.push(if write { 'w' } else { '-' });
-    s.push(if exec { 'x' } else { '-' });
-    s
-}
 
 // ============================================================
 // InMemorySftpBackend — 基于本地文件系统的测试实现
@@ -210,10 +213,10 @@ impl InMemorySftpBackend {
         local_path: &Path,
         meta: &std::fs::Metadata,
     ) -> FileEntry {
-        let file_type = if meta.is_dir() {
-            FileEntryType::Directory
-        } else if meta.is_symlink() {
+        let file_type = if meta.is_symlink() {
             FileEntryType::Symlink
+        } else if meta.is_dir() {
+            FileEntryType::Directory
         } else {
             FileEntryType::File
         };
@@ -249,7 +252,7 @@ impl SftpBackend for InMemorySftpBackend {
             if name == "." || name == ".." {
                 continue;
             }
-            let meta = entry.metadata().map_err(|e| {
+            let meta = fs::symlink_metadata(entry.path()).map_err(|e| {
                 SftpOpsError::Operation(format!("读取元数据失败: {e}"))
             })?;
             result.push(self.metadata_to_entry(name, &entry.path(), &meta));
@@ -293,7 +296,7 @@ impl SftpBackend for InMemorySftpBackend {
 
     fn realpath(&self, path: &Path) -> Result<PathBuf, SftpOpsError> {
         let local = self.to_local(path);
-        let canonical = fs::canonicalize(&local).map_err(|e| {
+        let canonical = dunce::canonicalize(&local).map_err(|e| {
             SftpOpsError::Operation(format!("解析路径失败 {}: {e}", path.display()))
         })?;
         Ok(self.to_remote(&canonical))
@@ -301,7 +304,7 @@ impl SftpBackend for InMemorySftpBackend {
 
     fn stat(&self, path: &Path) -> Result<FileEntry, SftpOpsError> {
         let local = self.to_local(path);
-        let meta = fs::metadata(&local).map_err(|e| {
+        let meta = fs::symlink_metadata(&local).map_err(|e| {
             SftpOpsError::Operation(format!("获取文件信息失败 {}: {e}", path.display()))
         })?;
         let name = path
@@ -316,6 +319,7 @@ impl SftpBackend for InMemorySftpBackend {
         local_path: &Path,
         remote_path: &Path,
         _progress_cb: Option<&ProgressCallback>,
+        _cancel_flag: Option<&AtomicBool>,
     ) -> Result<(), SftpOpsError> {
         let dest = self.to_local(remote_path);
         // 确保父目录存在
@@ -335,6 +339,7 @@ impl SftpBackend for InMemorySftpBackend {
         remote_path: &Path,
         local_path: &Path,
         _progress_cb: Option<&ProgressCallback>,
+        _cancel_flag: Option<&AtomicBool>,
     ) -> Result<(), SftpOpsError> {
         let src = self.to_local(remote_path);
         // 确保本地父目录存在

@@ -92,12 +92,13 @@ impl TransferTask {
         }
     }
 
-    /// 计算进度百分比 (0-100)
+    /// 计算进度百分比 (0-100)，超过 100 时限制为 100
     pub fn progress_percent(&self) -> u8 {
         if self.total_size == 0 {
             return 0;
         }
-        ((self.transferred as f64 / self.total_size as f64) * 100.0) as u8
+        let calculated = ((self.transferred as f64 / self.total_size as f64) * 100.0) as u8;
+        calculated.min(100)
     }
 
     /// 取消传输
@@ -114,7 +115,11 @@ impl TransferTask {
 /// 对话框类型
 #[derive(Debug, Clone)]
 pub enum Dialog {
-    DeleteConfirm { paths: Vec<PathBuf> },
+    DeleteConfirm {
+        paths: Vec<PathBuf>,
+        /// 每个路径是否为目录，与 paths 一一对应
+        is_dirs: Vec<bool>,
+    },
     Rename {
         path: PathBuf,
         original_name: String,
@@ -129,6 +134,7 @@ pub enum Dialog {
     OverwriteConfirm {
         source: PathBuf,
         target: PathBuf,
+        file_size: u64,
     },
     FileDetails { entry: FileEntry },
 }
@@ -337,6 +343,7 @@ mod tests {
     fn test_dialog_variants() {
         let delete = Dialog::DeleteConfirm {
             paths: vec![PathBuf::from("/foo")],
+            is_dirs: vec![false],
         };
         assert!(matches!(delete, Dialog::DeleteConfirm { .. }));
 
@@ -380,6 +387,7 @@ mod tests {
         let dialog = Dialog::OverwriteConfirm {
             source: PathBuf::from("/home/user/file.txt"),
             target: PathBuf::from("/home/user/file_copy.txt"),
+            file_size: 1024,
         };
         assert!(matches!(dialog, Dialog::OverwriteConfirm { .. }));
     }
@@ -493,7 +501,7 @@ mod tests {
         );
         task.transferred = 200;
         let pct = task.progress_percent();
-        assert_eq!(pct, 200, "transferred > total_size 时进度为 200%");
+        assert_eq!(pct, 100, "transferred > total_size 时进度限制为 100%");
     }
 
     /// 测试 TransferTask progress_percent 小数截断
@@ -547,7 +555,7 @@ mod tests {
     /// 测试 Dialog::DeleteConfirm 空路径列表
     #[test]
     fn test_dialog_delete_confirm_empty_paths() {
-        let dialog = Dialog::DeleteConfirm { paths: vec![] };
+        let dialog = Dialog::DeleteConfirm { paths: vec![], is_dirs: vec![] };
         assert!(matches!(dialog, Dialog::DeleteConfirm { .. }));
     }
 

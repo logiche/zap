@@ -1150,7 +1150,7 @@ fn test_delete_confirm_dialog_multiple_paths() {
 
         view.read(&app, |v, _| {
             match &v.dialog {
-                Some(Dialog::DeleteConfirm { paths }) => {
+                Some(Dialog::DeleteConfirm { paths, .. }) => {
                     assert_eq!(paths.len(), 2, "应显示 2 个待删除路径");
                 }
                 _ => panic!("应打开删除确认对话框"),
@@ -1275,6 +1275,7 @@ fn test_overwrite_confirm_dialog() {
             v.dialog = Some(Dialog::OverwriteConfirm {
                 source: PathBuf::from("/source.txt"),
                 target: PathBuf::from("/target.txt"),
+                file_size: 1,
             });
             ctx.notify();
         });
@@ -1741,6 +1742,7 @@ fn test_render_with_all_overlays_connected() {
             // 打开对话框
             v.dialog = Some(Dialog::DeleteConfirm {
                 paths: vec![PathBuf::from("/overlay.txt")],
+                is_dirs: vec![false],
             });
             // 添加传输任务
             use super::types::TransferTask;

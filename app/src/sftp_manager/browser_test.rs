@@ -708,6 +708,7 @@ fn test_confirm_delete_no_connection_with_dialog() {
         view.update(&mut app, |view, ctx| {
             view.dialog = Some(Dialog::DeleteConfirm {
                 paths: vec![PathBuf::from("/tmp/test")],
+                is_dirs: vec![false],
             });
             view.handle_action(&SftpBrowserAction::ConfirmDelete, ctx);
         });
@@ -1041,6 +1042,7 @@ fn test_confirm_overwrite_closes_dialog() {
             view.dialog = Some(Dialog::OverwriteConfirm {
                 source: PathBuf::from("/a"),
                 target: PathBuf::from("/b"),
+                file_size: 0,
             });
             view.handle_action(&SftpBrowserAction::ConfirmOverwrite, ctx);
         });
