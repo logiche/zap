@@ -8,6 +8,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use zap_sftp::session::{AuthMethod, SftpSession};
 use zap_sftp::types::OpenOptions;
@@ -59,13 +60,16 @@ impl From<std::io::Error> for SftpOpsError {
 /// 进度回调类型
 pub type ProgressCallback = Box<dyn Fn(u64, u64) + Send>;
 
+/// 连接超时时间
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// 使用服务器配置建立 SFTP 连接
 pub fn connect_from_server(
     server: &SshServerInfo,
     secret_store: &dyn SshSecretStore,
 ) -> Result<SftpSession, SftpOpsError> {
     let auth = build_auth_method(server, secret_store)?;
-    SftpSession::connect(&server.host, server.port, &server.username, auth)
+    SftpSession::connect(&server.host, server.port, &server.username, auth, Some(CONNECT_TIMEOUT))
         .map_err(|e| SftpOpsError::Connection(e.to_string()))
 }
 
@@ -119,7 +123,9 @@ pub fn delete_dir_recursive(sftp: &Sftp, path: &Path) -> Result<(), SftpOpsError
             zap_sftp::types::FileType::Dir => {
                 delete_dir_recursive(sftp, &entry.path)?;
             }
-            _ => {
+            zap_sftp::types::FileType::File
+            | zap_sftp::types::FileType::Symlink
+            | zap_sftp::types::FileType::Other => {
                 sftp.remove_file(&entry.path)?;
             }
         }
@@ -151,6 +157,7 @@ pub fn upload_file_streaming(
     local_path: &Path,
     remote_path: &Path,
     progress_cb: Option<&ProgressCallback>,
+    cancel_flag: &AtomicBool,
 ) -> Result<(), SftpOpsError> {
     let mut local_file =
         fs::File::open(local_path).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
@@ -163,6 +170,9 @@ pub fn upload_file_streaming(
     let mut transferred: u64 = 0;
 
     loop {
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(SftpOpsError::Cancelled);
+        }
         let n = std::io::Read::read(&mut local_file, &mut buf)
             .map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
         if n == 0 {
@@ -185,6 +195,7 @@ pub fn download_file_streaming(
     remote_path: &Path,
     local_path: &Path,
     progress_cb: Option<&ProgressCallback>,
+    cancel_flag: &AtomicBool,
 ) -> Result<(), SftpOpsError> {
     let mut remote_file = sftp.open(remote_path, OpenOptions::read())?;
     let metadata = remote_file.stat()?;
@@ -202,6 +213,9 @@ pub fn download_file_streaming(
     let mut transferred: u64 = 0;
 
     loop {
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(SftpOpsError::Cancelled);
+        }
         let n = remote_file.read(&mut buf)?;
         if n == 0 {
             break;
@@ -243,7 +257,7 @@ pub fn upload_dir_recursive(
 
         let entry = entry.map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
         let file_name = entry.file_name();
-        let remote_path = remote_dir.join(&file_name);
+        let remote_path = normalize_remote_path(&remote_dir.join(&file_name));
 
         let file_type = entry
             .file_type()
@@ -252,7 +266,7 @@ pub fn upload_dir_recursive(
         if file_type.is_dir() {
             upload_dir_recursive(sftp, &entry.path(), &remote_path, progress_cb, cancel_flag)?;
         } else {
-            upload_file_streaming(sftp, &entry.path(), &remote_path, progress_cb)?;
+            upload_file_streaming(sftp, &entry.path(), &remote_path, progress_cb, cancel_flag)?;
         }
     }
 
@@ -286,8 +300,10 @@ pub fn download_dir_recursive(
             zap_sftp::types::FileType::Dir => {
                 download_dir_recursive(sftp, &entry.path, &local_path, progress_cb, cancel_flag)?;
             }
-            _ => {
-                download_file_streaming(sftp, &entry.path, &local_path, progress_cb)?;
+            zap_sftp::types::FileType::File
+            | zap_sftp::types::FileType::Symlink
+            | zap_sftp::types::FileType::Other => {
+                download_file_streaming(sftp, &entry.path, &local_path, progress_cb, cancel_flag)?;
             }
         }
     }
@@ -347,12 +363,20 @@ fn shellexpand_path(path: &str) -> String {
 }
 
 /// 将读/写/执行布尔值转换为 rwx 权限字符串
-fn bool_to_rwx(read: bool, write: bool, exec: bool) -> String {
+pub(crate) fn bool_to_rwx(read: bool, write: bool, exec: bool) -> String {
     let mut s = String::with_capacity(3);
     s.push(if read { 'r' } else { '-' });
     s.push(if write { 'w' } else { '-' });
     s.push(if exec { 'x' } else { '-' });
     s
+}
+
+/// 规范化远程路径，将 Windows 反斜杠替换为正斜杠
+///
+/// 远程服务器（Linux）只接受正斜杠路径分隔符，
+/// 在 Windows 上 PathBuf::join 会产生反斜杠，必须转换。
+pub(crate) fn normalize_remote_path(path: &PathBuf) -> PathBuf {
+    PathBuf::from(path.to_string_lossy().replace('\\', "/"))
 }
 
 #[cfg(test)]

@@ -80,7 +80,7 @@ fn render_progress_bar(progress: u8, appearance: &Appearance) -> Box<dyn Element
         .finish();
     }
 
-    let remaining = 100 - progress;
+    let remaining = 100u8.saturating_sub(progress);
 
     // 进度填充
     let fill = ConstrainedBox::new(
