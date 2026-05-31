@@ -373,7 +373,8 @@ impl SftpBrowserView {
             }
             Err(_) => {}
         }
-        let title = format!("SFTP: {}", self.current_path.display());
+        let path = self.current_path.display();
+        let title = format!("SFTP: {path}");
         self.pane_configuration.update(ctx, |config, ctx| {
             config.set_title(title, ctx);
         });
@@ -568,7 +569,8 @@ impl SftpBrowserView {
                     Err(_) => {}
                 }
 
-                let title = format!("SFTP: {}", me.current_path.display());
+                let path = me.current_path.display();
+                let title = format!("SFTP: {path}");
                 me.pane_configuration.update(ctx, |config, ctx| {
                     config.set_title(title, ctx);
                 });
@@ -1007,7 +1009,13 @@ impl SftpBrowserView {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let remote_path = build_upload_remote_path(&self.current_path, &file_name);
+        let remote_path = match build_upload_remote_path(&self.current_path, &file_name) {
+            Some(p) => p,
+            None => {
+                self.show_error_toast("文件名包含非法字符".to_string(), ctx);
+                return;
+            }
+        };
 
         let total_size = std::fs::metadata(local_path).map(|m| m.len()).unwrap_or(0);
 
@@ -1088,6 +1096,87 @@ impl SftpBrowserView {
                 t.state = TransferState::Failed("未连接到服务器".to_string());
             }
             self.show_error_toast("上传失败: 未连接到服务器".to_string(), ctx);
+            ctx.notify();
+        }
+    }
+
+    /// 执行下载操作（公共逻辑，供确认覆盖和另存为共用）
+    fn execute_download(
+        &mut self,
+        remote_path: &Path,
+        local_path: &Path,
+        file_size: u64,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let task = TransferTask::new(
+            self.next_transfer_id,
+            remote_path.to_path_buf(),
+            local_path.to_path_buf(),
+            TransferDirection::Download,
+            file_size,
+        );
+        self.next_transfer_id += 1;
+        let task_id = task.id;
+        let cancel_flag = task.cancel_flag.clone();
+        self.transfers.push(task);
+
+        if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id) {
+            t.state = TransferState::InProgress;
+        }
+        ctx.notify();
+
+        if let Some(sftp) = &self.sftp {
+            let sftp = sftp.clone();
+            let transferred = Arc::new(AtomicU64::new(0));
+            let transferred_clone = transferred.clone();
+
+            let progress_cb: sftp_ops::ProgressCallback =
+                Box::new(move |bytes, _total| {
+                    transferred_clone.store(bytes, Ordering::SeqCst);
+                });
+
+            let remote_path = remote_path.to_path_buf();
+            let local_path = local_path.to_path_buf();
+            if let Some(handle) = self.run_blocking(
+                ctx,
+                move || {
+                    sftp.download_file(&remote_path, &local_path, Some(&progress_cb), Some(&cancel_flag))
+                },
+                move |me, result, ctx| {
+                    if let Some(t) = me.transfers.iter_mut().find(|t| t.id == task_id) {
+                        match &result {
+                            Ok(Ok(())) => {
+                                t.state = TransferState::Completed;
+                                t.transferred = t.total_size;
+                            }
+                            Ok(Err(e)) => {
+                                if matches!(e, super::sftp_ops::SftpOpsError::Cancelled) {
+                                    t.state = TransferState::Cancelled;
+                                } else {
+                                    t.state = TransferState::Failed(e.to_string());
+                                }
+                                t.transferred = transferred.load(Ordering::SeqCst);
+                            }
+                            Err(_) => {
+                                t.state = TransferState::Cancelled;
+                                t.transferred = transferred.load(Ordering::SeqCst);
+                            }
+                        }
+                    }
+
+                    if let Ok(Err(e)) = &result {
+                        me.show_error_toast(format!("下载失败: {e}"), ctx);
+                    }
+                    ctx.notify();
+                },
+            ) {
+                self.transfer_handles.insert(task_id, handle);
+            }
+        } else {
+            if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id) {
+                t.state = TransferState::Failed("未连接到服务器".to_string());
+            }
+            self.show_error_toast("下载失败: 未连接到服务器".to_string(), ctx);
             ctx.notify();
         }
     }
@@ -1184,12 +1273,12 @@ fn build_new_folder_path(parent_path: &PathBuf, folder_name: &str) -> Option<Pat
 }
 
 /// 构建上传后的远程路径
-fn build_upload_remote_path(current_path: &PathBuf, local_file_name: &str) -> PathBuf {
+fn build_upload_remote_path(current_path: &PathBuf, local_file_name: &str) -> Option<PathBuf> {
     let name = Path::new(local_file_name)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| local_file_name.to_string());
-    normalize_remote_path(&current_path.join(&name))
+    safe_join_name(current_path, &name).map(|p| normalize_remote_path(&p))
 }
 
 impl Entity for SftpBrowserView {
@@ -1369,80 +1458,7 @@ impl TypedActionView for SftpBrowserView {
 
                 // 关闭对话框
                 self.dialog = None;
-
-                // 创建下载传输任务
-                let task = TransferTask::new(
-                    self.next_transfer_id,
-                    source.clone(),
-                    target.clone(),
-                    TransferDirection::Download,
-                    file_size,
-                );
-                self.next_transfer_id += 1;
-                let task_id = task.id;
-                let cancel_flag = task.cancel_flag.clone();
-                self.transfers.push(task);
-
-                // 设置传输状态为进行中
-                if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id) {
-                    t.state = TransferState::InProgress;
-                }
-                ctx.notify();
-
-                if let Some(sftp) = &self.sftp {
-                    let sftp = sftp.clone();
-                    let transferred = Arc::new(AtomicU64::new(0));
-                    let transferred_clone = transferred.clone();
-
-                    let progress_cb: sftp_ops::ProgressCallback =
-                        Box::new(move |bytes, _total| {
-                            transferred_clone.store(bytes, Ordering::SeqCst);
-                        });
-
-                    let remote_path = source;
-                    let local_path = target;
-                    if let Some(handle) = self.run_blocking(
-                        ctx,
-                        move || {
-                            sftp.download_file(&remote_path, &local_path, Some(&progress_cb), Some(&cancel_flag))
-                        },
-                        move |me, result, ctx| {
-                            if let Some(t) = me.transfers.iter_mut().find(|t| t.id == task_id) {
-                                match &result {
-                                    Ok(Ok(())) => {
-                                        t.state = TransferState::Completed;
-                                        t.transferred = t.total_size;
-                                    }
-                                    Ok(Err(e)) => {
-                                        if matches!(e, super::sftp_ops::SftpOpsError::Cancelled) {
-                                            t.state = TransferState::Cancelled;
-                                        } else {
-                                            t.state = TransferState::Failed(e.to_string());
-                                        }
-                                        t.transferred = transferred.load(Ordering::SeqCst);
-                                    }
-                                    Err(_) => {
-                                        t.state = TransferState::Cancelled;
-                                        t.transferred = transferred.load(Ordering::SeqCst);
-                                    }
-                                }
-                            }
-
-                            if let Ok(Err(e)) = &result {
-                                me.show_error_toast(format!("下载失败: {e}"), ctx);
-                            }
-                            ctx.notify();
-                        },
-                    ) {
-                        self.transfer_handles.insert(task_id, handle);
-                    }
-                } else {
-                    if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id) {
-                        t.state = TransferState::Failed("未连接到服务器".to_string());
-                    }
-                    self.show_error_toast("下载失败: 未连接到服务器".to_string(), ctx);
-                    ctx.notify();
-                }
+                self.execute_download(&source, &target, file_size, ctx);
             }
             SftpBrowserAction::ContextMenu { index, position } => {
                 let index = *index;
@@ -1550,80 +1566,13 @@ impl TypedActionView for SftpBrowserView {
             }
             SftpBrowserAction::DownloadSaveAs { index, local_path } => {
                 let local_path = PathBuf::from(local_path);
-                if let Some(entry) = self.entries.get(*index) {
-                    let task = TransferTask::new(
-                        self.next_transfer_id,
-                        entry.path.clone(),
-                        local_path.clone(),
-                        TransferDirection::Download,
-                        entry.size,
-                    );
-                    self.next_transfer_id += 1;
-                    let task_id = task.id;
-                    let cancel_flag = task.cancel_flag.clone();
-                    self.transfers.push(task);
-
-                    // 设置传输状态为进行中
-                    if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id) {
-                        t.state = TransferState::InProgress;
-                    }
-                    ctx.notify();
-
-                    if let Some(sftp) = &self.sftp {
-                        let sftp = sftp.clone();
-                        let transferred = Arc::new(AtomicU64::new(0));
-                        let transferred_clone = transferred.clone();
-
-                        let progress_cb: sftp_ops::ProgressCallback =
-                            Box::new(move |bytes, _total| {
-                                transferred_clone.store(bytes, Ordering::SeqCst);
-                            });
-
-                        let remote_path = entry.path.clone();
-                        let local_path = local_path.clone();
-                        if let Some(handle) = self.run_blocking(
-                            ctx,
-                            move || {
-                                sftp.download_file(&remote_path, &local_path, Some(&progress_cb), Some(&cancel_flag))
-                            },
-                            move |me, result, ctx| {
-                                if let Some(t) = me.transfers.iter_mut().find(|t| t.id == task_id) {
-                                    match &result {
-                                        Ok(Ok(())) => {
-                                            t.state = TransferState::Completed;
-                                            t.transferred = t.total_size;
-                                        }
-                                        Ok(Err(e)) => {
-                                            if matches!(e, super::sftp_ops::SftpOpsError::Cancelled) {
-                                                t.state = TransferState::Cancelled;
-                                            } else {
-                                                t.state = TransferState::Failed(e.to_string());
-                                            }
-                                            t.transferred = transferred.load(Ordering::SeqCst);
-                                        }
-                                        Err(_) => {
-                                            // JoinError（被 abort）
-                                            t.state = TransferState::Cancelled;
-                                            t.transferred = transferred.load(Ordering::SeqCst);
-                                        }
-                                    }
-                                }
-
-                                if let Ok(Err(e)) = &result {
-                                    me.show_error_toast(format!("下载失败: {e}"), ctx);
-                                }
-                                ctx.notify();
-                            },
-                        ) {
-                            self.transfer_handles.insert(task_id, handle);
-                        }
-                    } else {
-                        if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id) {
-                            t.state = TransferState::Failed("未连接到服务器".to_string());
-                        }
-                        self.show_error_toast("下载失败: 未连接到服务器".to_string(), ctx);
-                        ctx.notify();
-                    }
+                let (remote_path, file_size) = self
+                    .entries
+                    .get(*index)
+                    .map(|e| (e.path.clone(), e.size))
+                    .unzip();
+                if let (Some(remote_path), Some(file_size)) = (remote_path, file_size) {
+                    self.execute_download(&remote_path, &local_path, file_size, ctx);
                 }
             }
         }
@@ -1844,7 +1793,8 @@ impl BackingView for SftpBrowserView {
         _ctx: &view::HeaderRenderContext<'_>,
         _app: &AppContext,
     ) -> view::HeaderContent {
-        let title = format!("SFTP: {}", self.current_path.display());
+        let path = self.current_path.display();
+        let title = format!("SFTP: {path}");
         view::HeaderContent::simple(title)
     }
 
@@ -2010,7 +1960,7 @@ mod tests {
     fn test_build_upload_remote_path_basic() {
         let current = PathBuf::from("/home/user");
         let result = build_upload_remote_path(&current, "upload.txt");
-        assert_eq!(result, PathBuf::from("/home/user/upload.txt"));
+        assert_eq!(result, Some(PathBuf::from("/home/user/upload.txt")));
     }
 
     /// 测试上传远程路径含反斜杠规范化
@@ -2018,7 +1968,17 @@ mod tests {
     fn test_build_upload_remote_path_normalizes() {
         let current = PathBuf::from("/home/user");
         let result = build_upload_remote_path(&current, "file.txt");
-        assert!(!result.to_string_lossy().contains('\\'));
+        assert!(result.is_some());
+        assert!(!result.unwrap().to_string_lossy().contains('\\'));
+    }
+
+    /// 测试上传远程路径拒绝危险文件名
+    #[test]
+    fn test_build_upload_remote_path_rejects_dangerous() {
+        let current = PathBuf::from("/home/user");
+        assert_eq!(build_upload_remote_path(&current, "../etc/passwd"), None);
+        assert_eq!(build_upload_remote_path(&current, ""), None);
+        assert_eq!(build_upload_remote_path(&current, "/etc/passwd"), None);
     }
 
     // ============================================================
