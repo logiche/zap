@@ -12,8 +12,13 @@ chrono.workspace = true
 diesel = { workspace = true, features = ["chrono", "sqlite"] }
 libsqlite3-sys = { version = "0.33.0", features = ["bundled"] }
 log.workspace = true
+reqwest.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
 warpui.workspace = true
+zap_sync = { path = "../zap_sync" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 arboard = { workspace = true }
@@ -21,3 +26,4 @@ windows.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }

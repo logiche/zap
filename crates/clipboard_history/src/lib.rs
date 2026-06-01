@@ -8,6 +8,7 @@
 pub mod db;
 pub mod model;
 pub mod record;
+pub mod sync;
 pub mod watcher;
 
 pub use model::{ClipboardHistoryModel, ClipboardHistoryModelEvent};
