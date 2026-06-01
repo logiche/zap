@@ -33,6 +33,7 @@ use warp_ssh_manager::{
     AuthType, ConnectionStatus, KeychainSecretStore, NodeKind, SecretKind, SshNode, SshRepository,
     SshSecretStore, SshServerInfo,
 };
+use zeroize::Zeroizing;
 
 const FIELD_LABEL_MARGIN_TOP: f32 = 6.0;
 const FIELD_LABEL_MARGIN_BOTTOM: f32 = 4.0;
@@ -490,7 +491,13 @@ impl SshServerView {
             last_connected_at: None,
         };
 
-        let password = if password.is_empty() { None } else { Some(password) };
+        // 密码立即用 Zeroizing 包裹,确保从 UI 文本框取出后全程内存零化,
+        // 直到 async 测试任务结束 drop。Empty 表示用户没填,按 None 处理。
+        let password: Option<Zeroizing<String>> = if password.is_empty() {
+            None
+        } else {
+            Some(Zeroizing::new(password))
+        };
 
         self.is_testing = true;
         self.status = None;
