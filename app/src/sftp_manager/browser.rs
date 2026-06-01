@@ -1944,7 +1944,11 @@ impl BackingView for SftpBrowserView {
 
     /// 关闭视图
     fn close(&mut self, ctx: &mut ViewContext<Self>) {
-        // 取消所有传输中的异步任务
+        // 协作式取消：设置所有传输任务的 cancel_flag
+        for task in &self.transfers {
+            task.cancel();
+        }
+        // 结构式取消：abort spawned future
         for (_, handle) in self.transfer_handles.drain() {
             handle.abort();
         }
