@@ -2628,7 +2628,8 @@ impl TypedPane<'_> {
             TypedPane::ExecutionProfileEditor => {
                 crate::t!("vertical-tabs-pane-kind-execution-profile")
             }
-            TypedPane::AppPanel | TypedPane::Other => crate::t!("vertical-tabs-pane-kind-other"),
+            TypedPane::AppPanel => crate::t!("vertical-tabs-pane-kind-app-panel"),
+            TypedPane::Other => crate::t!("vertical-tabs-pane-kind-other"),
         }
     }
 

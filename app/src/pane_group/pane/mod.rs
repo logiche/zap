@@ -17,7 +17,9 @@ pub(super) mod env_var_collection_pane;
 // Zap Wave 7-3:`environment_management_pane` 随 ambient-agent UI 子系统物理删。
 pub(super) mod execution_profile_editor_pane;
 pub(super) mod file_pane;
-pub(super) mod app_panel_pane;
+pub(crate) mod app_panel_pane;
+pub(crate) mod app_panel_pane_manager;
+pub(super) mod app_panel_style;
 pub(super) mod get_started_pane;
 pub(super) mod get_started_view;
 #[cfg(not(target_family = "wasm"))]

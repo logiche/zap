@@ -11,5 +11,5 @@ pub mod record;
 pub mod watcher;
 
 pub use model::{ClipboardHistoryModel, ClipboardHistoryModelEvent};
-pub use record::{make_preview, ClipboardRecord};
+pub use record::{make_preview, truncate_chars, ClipboardRecord};
 pub use watcher::ClipboardWatcher;

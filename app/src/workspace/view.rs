@@ -6844,8 +6844,19 @@ impl Workspace {
         );
     }
 
+    /// Opens an app panel pane as a new tab.
+    ///
+    /// 如果当前窗口已存在应用面板，则聚焦到已有面板而非创建新 tab。
     fn open_app_panel_pane(&mut self, ctx: &mut ViewContext<Self>) {
         use app_panel::nav::AppPanelSection;
+        use crate::pane_group::pane::app_panel_pane_manager::AppPanelPaneManager;
+
+        // 检查是否已有应用面板
+        let manager = AppPanelPaneManager::handle(ctx);
+        if let Some(locator) = manager.as_ref(ctx).find_pane(ctx.window_id()) {
+            self.focus_pane(locator, ctx);
+            return;
+        }
 
         let panes_layout = PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {
             is_focused: true,
@@ -6857,7 +6868,7 @@ impl Workspace {
         self.add_tab_with_pane_layout(
             panes_layout,
             Arc::new(HashMap::new()),
-            Some("应用".to_string()),
+            Some(crate::t!("app-panel-title")),
             ctx,
         );
     }
@@ -14668,6 +14679,7 @@ impl Workspace {
         self.show_settings_with_section(None, ctx);
     }
 
+    /// Shows the app panel, closing any open overlays first.
     fn show_app_panel(&mut self, ctx: &mut ViewContext<Self>) {
         self.close_all_overlays(ctx);
         self.open_app_panel_pane(ctx);
@@ -16841,6 +16853,7 @@ impl Workspace {
         SavePosition::new(Align::new(button).finish(), USER_AVATAR_BUTTON_POSITION_ID).finish()
     }
 
+    /// Renders the app panel toggle button for the tab bar.
     fn render_app_panel_button(&self, appearance: &Appearance) -> Box<dyn Element> {
         Align::new(
             self.render_tab_bar_icon_button(
@@ -16848,8 +16861,8 @@ impl Workspace {
                 icons::Icon::Grid,
                 &self.mouse_states.app_panel_icon,
                 WorkspaceAction::ShowAppPanel,
-                "应用".to_string(),
-                self.cached_keybindings[SHOW_SETTINGS_KEYBINDING_NAME].clone(),
+                crate::t!("app-panel-title"),
+                None,
                 false,
                 false,
             )

@@ -38,6 +38,9 @@ pub mod window;
 pub mod workflow;
 pub mod workspace;
 
+// 应用面板集成测试所需的类型中转导出
+pub use crate::pane_group::pane::app_panel_pane::{AppPanelAction, AppPanelView};
+
 pub fn view_of_type<T: View>(app: &App, window_id: WindowId, tab_index: usize) -> ViewHandle<T> {
     app.views_of_type(window_id)
         .expect("should be views for window")

@@ -1089,6 +1089,10 @@ fn initialize_app(
             .expect("Failed to initialize ClipboardHistoryModel")
     });
 
+    ctx.add_singleton_model(|_ctx| {
+        crate::pane_group::pane::app_panel_pane_manager::AppPanelPaneManager::new()
+    });
+
     let persistence_writer = PersistenceWriter::new(writer_handles);
 
     let model_event_sender = persistence_writer.sender();

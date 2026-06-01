@@ -6,18 +6,30 @@
 //! author logic
 //! date 2026-05-31
 
+#[cfg(target_os = "windows")]
 use std::ffi::c_void;
+#[cfg(target_os = "windows")]
 use std::mem::size_of;
+#[cfg(target_os = "windows")]
 use std::thread;
 
+#[cfg(target_os = "windows")]
 use arboard::Clipboard;
-use async_channel::{Receiver, Sender, unbounded};
+use async_channel::{Receiver, unbounded};
+#[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
+#[cfg(target_os = "windows")]
 use windows::Win32::System::DataExchange::{AddClipboardFormatListener, RemoveClipboardFormatListener};
+#[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+#[cfg(target_os = "windows")]
 use windows::Win32::System::Threading::*;
+#[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+// ==================== Windows 实现 ====================
+
+#[cfg(target_os = "windows")]
 /// 剪贴板变化监听器
 ///
 /// 后台线程创建隐藏窗口并注册 Windows 剪贴板变化通知，
@@ -29,6 +41,7 @@ pub struct ClipboardWatcher {
     _thread: Option<thread::JoinHandle<()>>,
 }
 
+#[cfg(target_os = "windows")]
 impl ClipboardWatcher {
     /// 启动剪贴板监听
     pub fn start() -> anyhow::Result<Self> {
@@ -61,9 +74,21 @@ impl ClipboardWatcher {
 
     /// 停止监听器
     pub fn stop(&mut self) {
-        if let Some(raw) = self.stop_event.take() {
+        let raw_handle = self.stop_event.take();
+        // 通知后台线程退出
+        if let Some(raw) = raw_handle {
             unsafe {
                 let _ = SetEvent(HANDLE(raw as *mut c_void));
+            }
+        }
+        // 等待线程退出，确保不再使用句柄
+        if let Some(thread) = self._thread.take() {
+            let _ = thread.join();
+        }
+        // 线程已退出，安全关闭句柄
+        if let Some(raw) = raw_handle {
+            unsafe {
+                let _ = CloseHandle(HANDLE(raw as *mut c_void));
             }
         }
     }
@@ -72,7 +97,7 @@ impl ClipboardWatcher {
     ///
     /// 创建隐藏窗口并注册剪贴板变化监听，使用 `MsgWaitForMultipleObjects`
     /// 同时等待 Windows 消息和停止信号。
-    fn run(tx: Sender<String>, stop_event: HANDLE) -> anyhow::Result<()> {
+    fn run(tx: async_channel::Sender<String>, stop_event: HANDLE) -> anyhow::Result<()> {
         unsafe {
             let class_name = windows::core::w!("ZapClipboardWatcher");
 
@@ -142,7 +167,7 @@ impl ClipboardWatcher {
     }
 
     /// 读取当前剪贴板文本并发送到通道
-    fn read_and_send(tx: &Sender<String>) {
+    fn read_and_send(tx: &async_channel::Sender<String>) {
         if let Ok(mut clipboard) = Clipboard::new() {
             if let Ok(text) = clipboard.get_text() {
                 if !text.is_empty() {
@@ -153,6 +178,38 @@ impl ClipboardWatcher {
     }
 }
 
+#[cfg(target_os = "windows")]
+impl Drop for ClipboardWatcher {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+// ==================== 非 Windows 桩实现 ====================
+
+#[cfg(not(target_os = "windows"))]
+/// 剪贴板变化监听器（非 Windows 平台桩实现）
+pub struct ClipboardWatcher {
+    rx: Receiver<String>,
+}
+
+#[cfg(not(target_os = "windows"))]
+impl ClipboardWatcher {
+    /// 非 Windows 平台不支持剪贴板监听
+    pub fn start() -> anyhow::Result<Self> {
+        anyhow::bail!("clipboard watcher is only supported on Windows");
+    }
+
+    /// 返回事件接收端
+    pub fn receiver(&self) -> Receiver<String> {
+        self.rx.clone()
+    }
+
+    /// 停止监听器（空操作）
+    pub fn stop(&mut self) {}
+}
+
+#[cfg(not(target_os = "windows"))]
 impl Drop for ClipboardWatcher {
     fn drop(&mut self) {
         self.stop();

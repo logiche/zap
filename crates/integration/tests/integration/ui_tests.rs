@@ -35,6 +35,13 @@ integration_tests! {
     test_open_and_close_settings,
     test_open_and_close_app_panel,
     test_reopen_app_panel,
+    test_duplicate_open_does_not_create_extra_tabs,
+    test_click_record_to_apply,
+    test_delete_record,
+    test_clear_all_confirmed,
+    test_clear_all_cancelled,
+    test_search_filters_records,
+    test_full_interaction_flow,
     #[ignore = "Affected by agent_view feature flag UI changes"]
     test_scroll_to_hidden_block_and_open_context_menu_with_keybinding,
     #[ignore = "Affected by agent_view feature flag UI changes"]

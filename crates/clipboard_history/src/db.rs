@@ -63,6 +63,7 @@ impl ClipboardDb {
         Ok(db)
     }
 
+    /// 执行数据库 schema 迁移
     fn run_migrations(&mut self) -> anyhow::Result<()> {
         sql_query(
             "CREATE TABLE IF NOT EXISTS clipboard_history (\
@@ -137,6 +138,7 @@ impl ClipboardDb {
 }
 
 impl ClipboardRow {
+    /// 将数据库行转换为领域模型
     fn to_record(self) -> ClipboardRecord {
         let created_at = DateTime::parse_from_rfc3339(&self.created_at)
             .map(|dt| dt.with_timezone(&Utc))

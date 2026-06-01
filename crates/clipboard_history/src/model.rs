@@ -22,6 +22,8 @@ pub struct ClipboardHistoryModel {
     records: Vec<ClipboardRecord>,
     max_records: usize,
     watcher: Option<ClipboardWatcher>,
+    /// 引用计数：跟踪有多少个 Pane 在使用 watcher
+    watcher_ref_count: usize,
 }
 
 impl Entity for ClipboardHistoryModel {
@@ -51,6 +53,7 @@ impl ClipboardHistoryModel {
             records,
             max_records: DEFAULT_MAX_RECORDS,
             watcher: None,
+            watcher_ref_count: 0,
         })
     }
 
@@ -63,6 +66,7 @@ impl ClipboardHistoryModel {
             records,
             max_records: DEFAULT_MAX_RECORDS,
             watcher: None,
+            watcher_ref_count: 0,
         })
     }
 
@@ -88,9 +92,15 @@ impl ClipboardHistoryModel {
         if content.is_empty() {
             return Ok(None);
         }
-        // 去重：与最近一条相同则跳过
-        if self.records.first().map(|r| r.content.as_str()) == Some(content.as_str()) {
-            return Ok(None);
+        // 如果内容已存在，移到顶部而非重复插入
+        if let Some(pos) = self.records.iter().position(|r| r.content == content) {
+            if pos == 0 {
+                return Ok(None); // 已在顶部，无需操作
+            }
+            let old_id = self.records[pos].id;
+            self.db.delete(old_id)?;
+            self.records.remove(pos);
+            // 继续执行下方的 insert
         }
         let record = self.db.insert(&content)?;
         self.records.insert(0, record.clone());
@@ -121,11 +131,13 @@ impl ClipboardHistoryModel {
         Ok(ClipboardHistoryModelEvent::AllCleared)
     }
 
-    /// 启动剪贴板监听（事件驱动）
+    /// 启动剪贴板监听（事件驱动，引用计数）
     ///
     /// 后台线程通过 Windows 原生 API 监听剪贴板变化，
     /// 仅在内容实际改变时读取并通知。
+    /// 首次调用时真正启动 watcher，后续调用仅递增引用计数。
     pub fn start_watching(&mut self, ctx: &mut ModelContext<Self>) {
+        self.watcher_ref_count = self.watcher_ref_count.saturating_add(1);
         if self.watcher.is_some() {
             return;
         }
@@ -142,10 +154,17 @@ impl ClipboardHistoryModel {
         }
     }
 
-    /// 停止剪贴板监听
+    /// 停止剪贴板监听（引用计数）
+    ///
+    /// 递减引用计数，仅在归零时真正停止 watcher。
     pub fn stop_watching(&mut self) {
-        if let Some(mut watcher) = self.watcher.take() {
-            watcher.stop();
+        if self.watcher_ref_count > 0 {
+            self.watcher_ref_count -= 1;
+        }
+        if self.watcher_ref_count == 0 {
+            if let Some(mut watcher) = self.watcher.take() {
+                watcher.stop();
+            }
         }
     }
 
@@ -218,15 +237,27 @@ mod tests {
     }
 
     #[test]
-    fn add_record_重复但非最近一条仍添加() {
+    fn add_record_重复旧记录移到顶部() {
         let mut model = test_model();
 
         model.add_record("a".to_string()).expect("add failed");
         model.add_record("b".to_string()).expect("add failed");
-        // "a" 不再是最近一条，应该可以再次添加
+        // "a" 不再是最近一条，重新添加应该移到顶部而非新增
         let event = model.add_record("a".to_string()).expect("add failed");
         assert!(event.is_some());
-        assert_eq!(model.records().len(), 3);
+        assert_eq!(model.records().len(), 2); // 仍然是 2 条
+        assert_eq!(model.records()[0].content, "a"); // "a" 移到顶部
+        assert_eq!(model.records()[1].content, "b");
+    }
+
+    #[test]
+    fn add_record_已在顶部的记录不产生事件() {
+        let mut model = test_model();
+
+        model.add_record("top".to_string()).expect("add failed");
+        let event = model.add_record("top".to_string()).expect("add failed");
+        assert!(event.is_none());
+        assert_eq!(model.records().len(), 1);
     }
 
     // --- delete ---
@@ -320,5 +351,105 @@ mod tests {
     fn records_初始为空() {
         let model = test_model();
         assert!(model.records().is_empty());
+    }
+
+    // --- 边界测试 ---
+
+    #[test]
+    fn add_record_淘汰超出上限的旧记录() {
+        let mut model = test_model();
+        // 设置较小的上限以触发淘汰
+        model.max_records = 3;
+
+        model.add_record("a".to_string()).expect("add failed");
+        model.add_record("b".to_string()).expect("add failed");
+        model.add_record("c".to_string()).expect("add failed");
+        assert_eq!(model.records().len(), 3);
+
+        // 添加第 4 条，应淘汰最旧的 "a"
+        model.add_record("d".to_string()).expect("add failed");
+        assert_eq!(model.records().len(), 3);
+        assert!(model.records().iter().all(|r| r.content != "a"));
+        assert_eq!(model.records()[0].content, "d");
+    }
+
+    #[test]
+    fn add_record_多条淘汰仅保留最新() {
+        let mut model = test_model();
+        model.max_records = 2;
+
+        for i in 0..5 {
+            model.add_record(format!("item{i}")).expect("add failed");
+        }
+
+        assert_eq!(model.records().len(), 2);
+        // 最新的两条保留
+        assert_eq!(model.records()[0].content, "item4");
+        assert_eq!(model.records()[1].content, "item3");
+    }
+
+    #[test]
+    fn new_in_memory_创建成功() {
+        let model = ClipboardHistoryModel::new_in_memory();
+        assert!(model.is_ok());
+        assert!(model.unwrap().records().is_empty());
+    }
+
+    #[test]
+    fn search_空模型搜索返回空() {
+        let model = test_model();
+        let results = model.search("anything");
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn search_空查询返回全部记录() {
+        let mut model = test_model();
+        model.add_record("a".to_string()).expect("add failed");
+        model.add_record("b".to_string()).expect("add failed");
+        model.add_record("c".to_string()).expect("add failed");
+
+        let results = model.search("");
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn delete_删除后其他记录保留() {
+        let mut model = test_model();
+        model.add_record("keep1".to_string()).expect("add failed");
+        model.add_record("delete_me".to_string()).expect("add failed");
+        model.add_record("keep2".to_string()).expect("add failed");
+
+        let target_id = model.records().iter().find(|r| r.content == "delete_me").unwrap().id;
+        model.delete(target_id).expect("delete failed");
+
+        assert_eq!(model.records().len(), 2);
+        assert!(model.records().iter().any(|r| r.content == "keep1"));
+        assert!(model.records().iter().any(|r| r.content == "keep2"));
+    }
+
+    #[test]
+    fn clear_all_空模型安全处理() {
+        let mut model = test_model();
+        let event = model.clear_all().expect("clear_all failed");
+        assert!(matches!(event, ClipboardHistoryModelEvent::AllCleared));
+        assert!(model.records().is_empty());
+    }
+
+    #[test]
+    fn add_record_纯空白字符串返回none() {
+        let mut model = test_model();
+        let event = model.add_record("   ".to_string()).expect("add failed");
+        // "   " 不是空字符串，is_empty() 为 false，所以会添加
+        assert!(event.is_some());
+    }
+
+    #[test]
+    fn add_record_包含unicode内容正常添加() {
+        let mut model = test_model();
+        let content = "你好世界 🌍 𝕳𝖊𝖑𝖑𝖔".to_string();
+        let event = model.add_record(content.clone()).expect("add failed");
+        assert!(event.is_some());
+        assert_eq!(model.records()[0].content, content);
     }
 }

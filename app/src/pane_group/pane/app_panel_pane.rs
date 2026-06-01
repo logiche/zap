@@ -8,17 +8,18 @@
 use app_panel::clipboard_page::ClipboardPageAction;
 use app_panel::nav::AppPanelSection;
 use app_panel::AppPanelViewInner;
+use chrono::Utc;
 use clipboard_history::ClipboardHistoryModel;
 use pathfinder_color::ColorU;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Dismiss, Element, Expanded, Fill, Flex, Hoverable, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Stack, Text,
 };
-use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
-use warpui::ui_components::components::UiComponent;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, Entity, ModelHandle, SingletonEntity as _, TypedActionView,
     View, ViewContext, ViewHandle, WindowId,
@@ -28,12 +29,13 @@ use crate::app_state::{AppPanelPaneSnapshot, LeafContents};
 use crate::appearance::Appearance;
 use crate::editor::{EditorView, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions};
 use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::app_panel_pane_manager::AppPanelPaneManager;
 use crate::pane_group::pane::IPaneType;
 use crate::pane_group::pane::view;
 use crate::search_bar::SearchBar;
 use crate::ui_components::dialog::{dialog_styles, Dialog};
 use crate::ui_components::icons;
-use crate::view_components::action_button::{ActionButton, DangerPrimaryTheme, NakedTheme};
+use crate::view_components::action_button::{ActionButton, DangerPrimaryTheme, DangerSecondaryTheme, NakedTheme};
 use crate::view_components::DismissibleToast;
 use crate::ToastStack;
 
@@ -65,8 +67,8 @@ pub struct AppPanelView {
     search_editor: ViewHandle<EditorView>,
     /// 搜索栏包装
     search_bar: ViewHandle<SearchBar>,
-    /// 清空按钮 hover 状态
-    clear_all_hover: MouseStateHandle,
+    /// 全部清空按钮
+    clear_all_button: ViewHandle<ActionButton>,
     /// 确认弹窗取消按钮
     confirm_cancel_button: ViewHandle<ActionButton>,
     /// 确认弹窗清空按钮
@@ -107,41 +109,29 @@ impl View for AppPanelView {
         for (idx, section) in AppPanelSection::all().iter().enumerate() {
             let hover = self.nav_hover_states[idx].clone();
             let is_active = *section == self.inner.current_section;
-            let label = section.label();
+            let label = match section {
+                AppPanelSection::Clipboard => crate::t!("app-panel-nav-clipboard"),
+            };
             let section = *section;
-            let font_family = ui_font_family;
-            let font_size = ui_font_size;
-            let fg: ColorU = theme.foreground().into_solid();
-            let active_bg: Fill = Fill::Solid(theme.active_ui_detail().into_solid());
-            let hover_bg: Fill = Fill::Solid(theme.nonactive_ui_detail().into_solid());
-            let no_bg: Fill = Fill::Solid(ColorU::transparent_black());
 
-            let item = Hoverable::new(hover, move |state| {
-                let bg = if is_active {
-                    active_bg
-                } else if state.is_hovered() {
-                    hover_bg
-                } else {
-                    no_bg
-                };
-
-                let text = Text::new(label, font_family, font_size)
-                    .with_style(Properties::default().weight(
-                        if is_active { Weight::Semibold } else { Weight::Normal },
-                    ))
-                    .with_color(fg)
-                    .finish();
-
-                Container::new(text)
-                    .with_padding_left(16.)
-                    .with_background(bg)
-                    .finish()
-            })
-            .with_cursor(Cursor::PointingHand)
-            .on_click(move |ctx, _, _| {
-                ctx.dispatch_typed_action(AppPanelAction::SelectSection(section));
-            })
-            .finish();
+            let item = appearance
+                .ui_builder()
+                .button(
+                    if is_active { ButtonVariant::Accent } else { ButtonVariant::Text },
+                    hover,
+                )
+                .with_text_label(label)
+                .with_style(
+                    UiComponentStyles::default()
+                        .set_border_width(0.)
+                        .set_margin(Coords::default().left(super::app_panel_style::NAV_ITEM_PADDING_LEFT))
+                        .set_padding(Coords::uniform(super::app_panel_style::SIDEBAR_PADDING)),
+                )
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AppPanelAction::SelectSection(section));
+                })
+                .finish();
 
             nav_column = nav_column.with_child(item);
         }
@@ -149,15 +139,15 @@ impl View for AppPanelView {
         let sidebar = ConstrainedBox::new(
             Container::new(nav_column.finish())
                 .with_border(Border::right(1.).with_border_fill(theme.outline()))
-                .with_uniform_padding(8.)
+                .with_uniform_padding(super::app_panel_style::SIDEBAR_PADDING)
                 .finish(),
         )
-        .with_width(200.)
+        .with_width(super::app_panel_style::SIDEBAR_WIDTH)
         .finish();
 
         // --- 搜索框 ---
         let search_bar_element = Container::new(ChildView::new(&self.search_bar).finish())
-            .with_margin_bottom(8.)
+            .with_margin_bottom(super::app_panel_style::SEARCH_BAR_MARGIN_BOTTOM)
             .finish();
 
         // --- 剪贴板记录列表 ---
@@ -174,7 +164,7 @@ impl View for AppPanelView {
 
         for record in &filtered {
             let preview_str = record.preview.clone();
-            let time_str = app_panel::clipboard_page::format_time(&record.created_at);
+            let time_str = format_time_i18n(&record.created_at);
             let record_id = record.id;
             let font_family = ui_font_family;
             let font_size = ui_font_size;
@@ -185,7 +175,7 @@ impl View for AppPanelView {
                 let preview = Text::new(preview_str.clone(), font_family, font_size)
                     .with_color(fg)
                     .finish();
-                let time = Text::new(time_str.clone(), font_family, 11.)
+                let time = Text::new(time_str.clone(), font_family, super::app_panel_style::timestamp_font_size(appearance))
                     .with_color(detail)
                     .finish();
 
@@ -198,10 +188,10 @@ impl View for AppPanelView {
                             Container::new(
                                 ConstrainedBox::new(
                                     icons::Icon::X.to_warpui_icon(detail.into()).finish()
-                                ).with_width(14.).with_height(14.).finish()
+                                ).with_width(super::app_panel_style::DELETE_ICON_SIZE).with_height(super::app_panel_style::DELETE_ICON_SIZE).finish()
                             )
                             .with_background(del_bg)
-                            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.)))
+                            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(super::app_panel_style::CORNER_RADIUS_SMALL)))
                             .finish()
                         })
                         .with_cursor(Cursor::PointingHand)
@@ -232,7 +222,7 @@ impl View for AppPanelView {
                 }
 
                 Container::new(row_content.finish())
-                    .with_uniform_padding(8.)
+                    .with_uniform_padding(super::app_panel_style::RECORD_ROW_PADDING)
                     .with_background(bg)
                     .finish()
             })
@@ -248,39 +238,8 @@ impl View for AppPanelView {
         }
 
         // --- 全部清空按钮 ---
-        let danger_fg: ColorU = theme.ui_error_color();
-        let clear_hover_state = self.clear_all_hover.clone();
-        let clear_font_family = ui_font_family;
-        let clear_font_size = ui_font_size;
-        let clear_border = theme.outline();
-
-        let clear_all_button = Hoverable::new(clear_hover_state, move |state| {
-            let clear_hover_bg: Fill = Fill::Solid(theme.nonactive_ui_detail().into_solid());
-            let clear_no_bg: Fill = Fill::Solid(ColorU::transparent_black());
-            let bg = if state.is_hovered() { clear_hover_bg } else { clear_no_bg };
-            let clear_text = Text::new("全部清空", clear_font_family, clear_font_size)
-                .with_color(danger_fg)
-                .finish();
-            Container::new(
-                Flex::row()
-                    .with_main_axis_alignment(MainAxisAlignment::Center)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_child(clear_text)
-                    .finish(),
-            )
-            .with_uniform_padding(8.)
-            .with_background(bg)
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-            .with_border(Border::all(1.).with_border_fill(clear_border))
-            .finish()
-        })
-        .with_cursor(Cursor::PointingHand)
-        .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(AppPanelAction::Clipboard(
-                ClipboardPageAction::ClearAllRequested,
-            ));
-        })
-        .finish();
+        let clear_all_button = Align::new(ChildView::new(&self.clear_all_button).finish())
+            .finish();
 
         // --- 内容区布局 ---
         let content = Container::new(
@@ -290,12 +249,12 @@ impl View for AppPanelView {
                 .with_child(records_column.finish())
                 .with_child(
                     Container::new(clear_all_button)
-                        .with_margin_top(8.)
+                        .with_margin_top(super::app_panel_style::CLEAR_BTN_MARGIN_TOP)
                         .finish(),
                 )
                 .finish(),
         )
-        .with_uniform_padding(16.)
+        .with_uniform_padding(super::app_panel_style::CONTENT_PADDING)
         .finish();
 
         let main_layout = Flex::row()
@@ -308,21 +267,23 @@ impl View for AppPanelView {
         // --- 确认清空弹窗 ---
         if self.inner.confirm_clear_shown {
             let dialog = Dialog::new(
-                "确认清空".to_string(),
-                Some("将永久删除所有剪贴板历史记录，此操作无法撤销。".to_string()),
+                crate::t!("app-panel-confirm-clear-title"),
+                Some(crate::t!("app-panel-confirm-clear-desc")),
                 dialog_styles(appearance),
             )
             .with_bottom_row_child(ChildView::new(&self.confirm_cancel_button).finish())
             .with_bottom_row_child(
                 Container::new(ChildView::new(&self.confirm_delete_button).finish())
-                    .with_margin_left(12.)
+                    .with_margin_left(super::app_panel_style::CONFIRM_BTN_MARGIN_LEFT)
                     .finish(),
             )
-            .with_width(400.)
+            .with_width(super::app_panel_style::CONFIRM_DIALOG_WIDTH)
             .build()
             .finish();
 
-            let overlay = Dismiss::new(dialog)
+            let overlay = Dismiss::new(
+                Align::new(dialog).finish()
+            )
                 .prevent_interaction_with_other_elements()
                 .on_dismiss(|ctx, _| {
                     ctx.dispatch_typed_action(AppPanelAction::Clipboard(
@@ -359,11 +320,11 @@ impl TypedActionView for AppPanelView {
                             // 写入系统剪贴板
                             ctx.clipboard().write(ClipboardContent::plain_text(content.clone()));
                             // 显示 toast
-                            let preview = &content[..content.len().min(50)];
+                            let preview = clipboard_history::truncate_chars(&content, 50);
                             let window_id = ctx.window_id();
                             ToastStack::handle(ctx).update(ctx, |stack, ctx| {
                                 stack.add_ephemeral_toast(
-                                    DismissibleToast::success(format!("已复制: {}", preview)),
+                                    DismissibleToast::success(crate::t!("app-panel-copied-toast", preview = preview.as_str())),
                                     window_id, ctx,
                                 );
                             });
@@ -378,7 +339,7 @@ impl TypedActionView for AppPanelView {
                         let window_id = ctx.window_id();
                         ToastStack::handle(ctx).update(ctx, |stack, ctx| {
                             stack.add_ephemeral_toast(
-                                DismissibleToast::success("已清空全部剪贴板历史".to_string()),
+                                DismissibleToast::success(crate::t!("app-panel-cleared-toast")),
                                 window_id, ctx,
                             );
                         });
@@ -420,7 +381,7 @@ impl BackingView for AppPanelView {
         _ctx: &view::HeaderRenderContext<'_>,
         _app: &AppContext,
     ) -> view::HeaderContent {
-        view::HeaderContent::simple("应用")
+        view::HeaderContent::simple(crate::t!("app-panel-title"))
     }
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {
@@ -437,6 +398,7 @@ pub struct AppPanelPane {
 }
 
 impl AppPanelPane {
+    /// Creates an AppPanelPane from an existing AppPanelView handle.
     fn from_view(app_panel_view: ViewHandle<AppPanelView>, ctx: &mut AppContext) -> Self {
         let pane_configuration = app_panel_view.as_ref(ctx).pane_configuration.clone();
         let view = ctx.add_typed_action_view(app_panel_view.window_id(ctx), |ctx| {
@@ -450,6 +412,15 @@ impl AppPanelPane {
         }
     }
 
+    /// 创建新的应用面板 Pane
+    ///
+    /// 初始化内部 View 状态、搜索编辑器、确认弹窗按钮，
+    /// 并启动剪贴板监听器。Pane 通过 PaneView 包装后集成到 PaneGroup 系统。
+    ///
+    /// # 参数
+    /// * `section` - 初始显示的子页面
+    /// * `_window_id` - 所属窗口 ID（当前未使用）
+    /// * `ctx` - 用于创建子 View 和 Model 的上下文
     pub fn new<V: View>(
         section: AppPanelSection,
         _window_id: WindowId,
@@ -461,7 +432,7 @@ impl AppPanelPane {
             .collect();
 
         let pane_configuration =
-            ctx.add_model(|_ctx| PaneConfiguration::new("应用"));
+            ctx.add_model(|_ctx| PaneConfiguration::new(crate::t_static!("app-panel-title")));
 
         let pane_config_clone = pane_configuration.clone();
 
@@ -480,32 +451,37 @@ impl AppPanelPane {
         });
         search_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
-            editor.set_placeholder_text("搜索剪贴板记录...", ctx);
+            editor.set_placeholder_text(crate::t!("app-panel-search-placeholder"), ctx);
         });
         let search_bar = ctx.add_typed_action_view(|_| SearchBar::new(search_editor.clone()));
 
         // 创建确认弹窗按钮
         let confirm_cancel_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("取消", NakedTheme).on_click(|ctx| {
+            ActionButton::new(crate::t!("app-panel-cancel"), NakedTheme).on_click(|ctx| {
                 ctx.dispatch_typed_action(AppPanelAction::Clipboard(
                     ClipboardPageAction::ClearAllCancelled,
                 ));
             })
         });
         let confirm_delete_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("清空", DangerPrimaryTheme).on_click(|ctx| {
+            ActionButton::new(crate::t!("app-panel-confirm"), DangerPrimaryTheme).on_click(|ctx| {
                 ctx.dispatch_typed_action(AppPanelAction::Clipboard(
                     ClipboardPageAction::ClearAllConfirmed,
                 ));
             })
         });
-        let clear_all_hover = MouseStateHandle::default();
+        let clear_all_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new(crate::t!("app-panel-clear-all"), DangerSecondaryTheme).on_click(|ctx| {
+                ctx.dispatch_typed_action(AppPanelAction::Clipboard(
+                    ClipboardPageAction::ClearAllRequested,
+                ));
+            })
+        });
 
         let app_panel_view = ctx.add_typed_action_view(|_ctx| {
             AppPanelView {
                 inner: AppPanelViewInner {
                     current_section: section,
-                    search_query: String::new(),
                     confirm_clear_shown: false,
                 },
                 pane_configuration: pane_config_clone,
@@ -513,7 +489,7 @@ impl AppPanelPane {
                 nav_hover_states,
                 search_editor,
                 search_bar,
-                clear_all_hover,
+                clear_all_button,
                 confirm_cancel_button,
                 confirm_delete_button,
             }
@@ -541,8 +517,15 @@ impl PaneContent for AppPanelPane {
         ctx: &mut ViewContext<PaneGroup>,
     ) {
         let pane_id = self.id();
+        let pane_group_id = ctx.view_id();
+        let window_id = ctx.window_id();
         self.view
             .update(ctx, |view, ctx| view.set_focus_handle(focus_handle, ctx));
+
+        // 注册面板到 Manager
+        AppPanelPaneManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.register_pane(self, pane_group_id, window_id, ctx);
+        });
 
         ctx.subscribe_to_view(&self.view, move |group, _, event, ctx| {
             group.handle_pane_view_event(pane_id, event, ctx);
@@ -555,11 +538,18 @@ impl PaneContent for AppPanelPane {
         detach_type: DetachType,
         ctx: &mut ViewContext<PaneGroup>,
     ) {
-        // 只在关闭时停止轮询，移动时保持
+        // 只在关闭时停止监听，移动时保持
         if matches!(detach_type, DetachType::Closed | DetachType::HiddenForClose) {
             let model = ClipboardHistoryModel::handle(ctx);
             model.update(ctx, |model, _ctx| {
                 model.stop_watching();
+            });
+
+            // 从 Manager 注销面板
+            let pane_group_id = ctx.view_id();
+            let window_id = ctx.window_id();
+            AppPanelPaneManager::handle(ctx).update(ctx, |manager, ctx| {
+                manager.deregister_pane(&window_id, pane_group_id, self.id(), ctx);
             });
         }
         ctx.unsubscribe_to_view(&self.view);
@@ -597,11 +587,30 @@ impl PaneContent for AppPanelPane {
 // --- PaneId helpers ---
 
 impl PaneId {
+    /// Creates a PaneId for the app panel from a view context.
     fn from_app_panel_pane_ctx(ctx: &ViewContext<super::view::PaneView<AppPanelView>>) -> Self {
         Self::new_from_ctx(IPaneType::AppPanel, ctx)
     }
 
+    /// Creates a PaneId for the app panel from a view handle.
     fn from_app_panel_pane_view(view: &ViewHandle<super::view::PaneView<AppPanelView>>) -> Self {
         Self::new(IPaneType::AppPanel, view)
+    }
+}
+
+/// 格式化时间为国际化的显示字符串
+fn format_time_i18n(dt: &chrono::DateTime<chrono::Utc>) -> String {
+    let now = Utc::now();
+    let diff = now.signed_duration_since(*dt);
+    if diff.num_seconds() < 60 {
+        crate::t!("app-panel-time-just-now")
+    } else if diff.num_minutes() < 60 {
+        crate::t!("app-panel-time-minutes-ago", count = diff.num_minutes())
+    } else if diff.num_hours() < 24 {
+        crate::t!("app-panel-time-hours-ago", count = diff.num_hours())
+    } else if diff.num_days() < 7 {
+        crate::t!("app-panel-time-days-ago", count = diff.num_days())
+    } else {
+        dt.format("%m-%d %H:%M").to_string()
     }
 }
