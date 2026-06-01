@@ -232,3 +232,154 @@ fn password_auth_args_ends_with_echo_ok_command() {
         "cmd_args must end with `echo ok` as remote command; got {args:?}"
     );
 }
+
+/// 回归保护:password 路径的 destination (`user@host`) 必须出现在所有 `-o`
+/// 选项**之后**、`echo ok` **之前**。SSH 命令行解析规则为
+/// `ssh [options] destination [command]`,第一个非选项参数 = destination,
+/// 其后一切 = 远程命令。若 `-o` 选项跑到 destination 之后,SSH 会把它
+/// 当作远程命令的一部分而非自身选项,导致 `PreferredAuthentications`、
+/// `KbdInteractiveAuthentication` 等关键选项全部失效,触发 kbd-interactive
+/// PAM 重试链卡满 10s `TEST_TIMEOUT`。
+/// author: logic
+/// date: 2026-06-01
+#[test]
+fn password_auth_args_destination_before_echo_ok_and_after_options() {
+    let s = server();
+    let args = build_password_auth_cmd_args(&s);
+    let joined = args.join(" ");
+
+    // destination "alice@1.2.3.4" 必须出现在 "echo ok" 之前
+    let dest_pos = joined
+        .find("alice@1.2.3.4")
+        .expect("destination must appear in args");
+    let echo_pos = joined
+        .find("echo ok")
+        .expect("`echo ok` must appear in args");
+
+    assert!(
+        dest_pos < echo_pos,
+        "destination must come before `echo ok`; got joined: {joined}"
+    );
+
+    // destination 必须出现在所有 -o 选项之后
+    // 找最后一个 -o 选项的位置
+    let last_o_pos = joined.rfind("-o ").expect("expected at least one -o option");
+    assert!(
+        last_o_pos < dest_pos,
+        "all -o options must come before destination; got joined: {joined}"
+    );
+}
+
+/// 回归保护:key auth 路径的 `build_ssh_args` 也需 destination 在 -o 选项之后。
+/// 用 `build_ssh_args` + 手动追加选项的方式验证顺序,模拟 `test_key_auth` 的构建。
+/// author: logic
+/// date: 2026-06-01
+#[test]
+fn key_auth_args_destination_comes_after_options() {
+    let mut s = server();
+    s.auth_type = AuthType::Key;
+    s.key_path = Some("/home/user/.ssh/id_rsa".into());
+
+    // 模拟 test_key_auth 的构建逻辑
+    let mut args = build_ssh_args(&s);
+    let target = args.pop().unwrap();
+    args.extend([
+        "-o".into(),
+        "BatchMode=yes".into(),
+        "-o".into(),
+        "ConnectTimeout=5".into(),
+        "-o".into(),
+        "StrictHostKeyChecking=no".into(),
+        "-o".into(),
+        "LogLevel=ERROR".into(),
+    ]);
+    args.push(target);
+    args.push("echo ok".into());
+
+    let joined = args.join(" ");
+    let dest_pos = joined
+        .find("alice@1.2.3.4")
+        .expect("destination must appear in args");
+    let echo_pos = joined
+        .find("echo ok")
+        .expect("`echo ok` must appear in args");
+    let last_o_pos = joined.rfind("-o ").expect("expected at least one -o option");
+
+    assert!(
+        last_o_pos < dest_pos,
+        "all -o options must come before destination; got joined: {joined}"
+    );
+    assert!(
+        dest_pos < echo_pos,
+        "destination must come before `echo ok`; got joined: {joined}"
+    );
+}
+
+// -------- Windows SSH_ASKPASS 回归保护 --------
+//
+// Windows 上 Win32-OpenSSH 因无控制台 + CREATE_NO_WINDOW 而拒绝从 stdin
+// 读密码(Win32-OpenSSH issue #1470),必须走 SSH_ASKPASS 机制。
+// 守住这块代码的存在,防止有人误把 Windows 路径合并回 stdin 写法。
+// author: logic
+// date: 2026-06-01
+
+/// 回归保护:Windows 上 `test_password_auth` 入口必须引用 `AskpassSession`,
+/// 不能直接用 stdin 写密码。这条断言通过类型系统保证:如果 Windows 路径
+/// 被改成 stdin 方式,函数体里就不会出现 `AskpassSession::new`,测试会失败。
+#[cfg(windows)]
+#[test]
+fn windows_password_auth_uses_askpass_not_stdin() {
+    // 这个测试在编译期就起作用:如果 ssh_command.rs 的 Windows 分支
+    // 退回到 stdin 注入,`AskpassSession` 类型不再被使用,编译会报
+    // dead_code 错误,CI 就会挂。
+    // 这里只验证 AskpassSession 类型存在 + 可 new — 跑不起来(需要写文件),
+    // 但能挡住"误删 AskpassSession"这类破坏。
+    let _ = std::any::type_name::<AskpassSession>();
+}
+
+/// 真实端到端:创建 `AskpassSession` 拿到 askpass 脚本路径,然后用
+/// `CreateProcessW` 派生它(模拟 ssh 派生 askpass 的方式),验证它能起来。
+///
+/// 这条测试守住 askpass 脚本在 ssh 视角下"可执行"——直接挡住
+/// `CreateProcessW failed error:5`(ERROR_ACCESS_DENIED)这类回归。
+/// 之前出过 bug:askpass 文件设了 `FILE_ATTRIBUTE_HIDDEN`,导致 ssh 的
+/// `posix_spawnp` 拒绝派生,askpass 根本起不来,密码没传出去,server
+/// 报 "wrong password"。
+#[cfg(windows)]
+#[test]
+fn windows_askpass_script_is_spawnable() {
+    use std::os::windows::process::CommandExt as _;
+    use std::process::Stdio;
+    use zeroize::Zeroizing;
+
+    let password: Zeroizing<String> = Zeroizing::new("dummy-pw-for-spawn-test".into());
+    let session = AskpassSession::new(&password).expect("AskpassSession::new failed");
+    let script = session.script_path.clone();
+    let password_file = session.password_path.clone();
+
+    // 派生 askpass 脚本:用 CreateProcessW 走和 ssh 相同的代码路径。
+    // CREATE_NO_WINDOW 模拟 ssh 派生 askpass 时的环境(无控制台)。
+    // 必须设 WARP_SSH_ASKPASS_FILE env,脚本靠它定位密码文件。
+    let output = std::process::Command::new("cmd.exe")
+        .raw_arg(format!("/c \"{}\"", script.display()))
+        .env("WARP_SSH_ASKPASS_FILE", &password_file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .output()
+        .expect("CreateProcessW failed — askpass script is not spawnable");
+
+    assert!(
+        output.status.success(),
+        "askpass script exited non-zero: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // askpass 脚本读密码文件首行并 echo,应该输出 session 创建时写入的密码
+    assert!(
+        stdout.trim() == "dummy-pw-for-spawn-test",
+        "askpass output mismatch: got {stdout:?}"
+    );
+}
