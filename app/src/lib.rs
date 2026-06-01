@@ -1220,6 +1220,19 @@ fn initialize_app(
     // 云同步 Token 走 OS 密钥库，不落 TOML。
     ctx.add_singleton_model(crate::settings::CloudSyncTokenStore::new);
 
+    // 将 Gitee Token 传递给剪贴板历史模型
+    {
+        let token = crate::settings::CloudSyncTokenStore::as_ref(ctx)
+            .get(crate::settings::GITEE_TOKEN_KEY)
+            .filter(|t| !t.is_empty())
+            .map(|t| t.to_string());
+        if let Some(token) = token {
+            clipboard_history::ClipboardHistoryModel::handle(ctx).update(ctx, |model, _| {
+                model.set_sync_token(token);
+            });
+        }
+    }
+
     cfg_if::cfg_if! {
         if #[cfg(feature = "crash_reporting")] {
             let is_crash_reporting_enabled = crash_reporting::init(ctx);

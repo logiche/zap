@@ -499,6 +499,7 @@ impl AppPanelPane {
         let model = ClipboardHistoryModel::handle(ctx);
         model.update(ctx, |model, ctx| {
             model.start_watching(ctx);
+            model.trigger_sync_download(ctx);
         });
 
         Self::from_view(app_panel_view, ctx)

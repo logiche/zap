@@ -175,6 +175,7 @@ impl ClipboardHistoryModel {
     /// 处理从后台线程收到的剪贴板内容
     fn on_clipboard_content(&mut self, content: String, ctx: &mut ModelContext<Self>) {
         let _ = self.add_record(content);
+        self.trigger_sync_upload(ctx);
         ctx.notify();
     }
 
@@ -249,6 +250,97 @@ impl ClipboardHistoryModel {
             self.records.retain(|r| !evicted.contains(&r.id));
         }
         Ok(added)
+    }
+
+    /// 触发异步上传同步
+    pub fn trigger_sync_upload(&mut self, ctx: &mut ModelContext<Self>) {
+        let Some(token) = self.sync_token.clone() else {
+            return;
+        };
+        let records = self.recent_records_snapshot();
+        let gist_id = self.get_sync_gist_id();
+        let version = self.get_sync_version() + 1;
+        let foreground = ctx.spawner();
+
+        ctx.spawn(
+            async move {
+                let client = crate::sync::ClipboardGistClient::new();
+                match crate::sync::upload_async(
+                    &client,
+                    &token,
+                    &records,
+                    gist_id.as_deref(),
+                    version,
+                )
+                .await
+                {
+                    Ok((new_version, gist_id)) => {
+                        log::debug!("剪贴板上传同步完成, version={new_version}");
+                        let _ = foreground
+                            .spawn(move |me, _| {
+                                let _ = me.set_sync_version(new_version);
+                                let _ = me.set_sync_gist_id(&gist_id);
+                            })
+                            .await;
+                    }
+                    Err(e) => {
+                        log::debug!("剪贴板上传同步失败: {e}");
+                    }
+                }
+            },
+            |_, _, _| {},
+        );
+    }
+
+    /// 触发异步下载同步
+    pub fn trigger_sync_download(&mut self, ctx: &mut ModelContext<Self>) {
+        let Some(token) = self.sync_token.clone() else {
+            return;
+        };
+        let gist_id = self.get_sync_gist_id();
+        let version = self.get_sync_version();
+        let existing = self.existing_contents();
+        let foreground = ctx.spawner();
+
+        ctx.spawn(
+            async move {
+                let client = crate::sync::ClipboardGistClient::new();
+                match crate::sync::download_async(
+                    &client,
+                    &token,
+                    gist_id.as_deref(),
+                    version,
+                    &existing,
+                )
+                .await
+                {
+                    Ok(crate::sync::SyncOutcome::Downloaded {
+                        version,
+                        new_items,
+                        gist_id,
+                    }) => {
+                        log::debug!("剪贴板下载同步完成, version={version}");
+                        let _ = foreground
+                            .spawn(move |me, _| {
+                                if let Ok(added) = me.apply_sync_download(&new_items) {
+                                    log::debug!("剪贴板合并了{added}条新记录");
+                                }
+                                let _ = me.set_sync_version(version);
+                                let _ = me.set_sync_gist_id(&gist_id);
+                            })
+                            .await;
+                    }
+                    Ok(crate::sync::SyncOutcome::AlreadyUpToDate) => {
+                        log::debug!("剪贴板已是最新");
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        log::debug!("剪贴板下载同步失败: {e}");
+                    }
+                }
+            },
+            |_, _, _| {},
+        );
     }
 }
 
