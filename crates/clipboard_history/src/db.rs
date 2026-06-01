@@ -74,6 +74,14 @@ impl ClipboardDb {
              )",
         )
         .execute(&mut self.conn)?;
+
+        sql_query(
+            "CREATE TABLE IF NOT EXISTS sync_meta (\
+             key TEXT PRIMARY KEY,\
+             value TEXT NOT NULL\
+             )",
+        )
+        .execute(&mut self.conn)?;
         Ok(())
     }
 
@@ -134,6 +142,66 @@ impl ClipboardDb {
         diesel::delete(dsl::clipboard_history.filter(dsl::id.eq_any(&ids_to_delete)))
             .execute(&mut self.conn)?;
         Ok(ids_to_delete)
+    }
+
+    /// 读取 sync_meta 中的值
+    pub fn get_sync_meta(&mut self, key: &str) -> Option<String> {
+        use diesel::sql_types::Text;
+        #[derive(QueryableByName)]
+        struct MetaRow {
+            #[diesel(sql_type = Text)]
+            value: String,
+        }
+        sql_query("SELECT value FROM sync_meta WHERE key = ?")
+            .bind::<Text, _>(key)
+            .get_result::<MetaRow>(&mut self.conn)
+            .ok()
+            .map(|r| r.value)
+    }
+
+    /// 设置 sync_meta 键值对（INSERT OR REPLACE）
+    pub fn set_sync_meta(&mut self, key: &str, value: &str) -> anyhow::Result<()> {
+        use diesel::sql_types::Text;
+        sql_query("INSERT OR REPLACE INTO sync_meta (key, value) VALUES (?, ?)")
+            .bind::<Text, _>(key)
+            .bind::<Text, _>(value)
+            .execute(&mut self.conn)?;
+        Ok(())
+    }
+
+    /// 使用指定时间戳（毫秒）插入记录，重复内容跳过
+    ///
+    /// 返回 `Some(())` 表示新插入，`None` 表示重复跳过
+    pub fn insert_with_timestamp(
+        &mut self,
+        content: &str,
+        timestamp_ms: i64,
+    ) -> anyhow::Result<Option<()>> {
+        let count: i64 = dsl::clipboard_history
+            .filter(dsl::content.eq(content))
+            .count()
+            .get_result(&mut self.conn)?;
+        if count > 0 {
+            return Ok(None);
+        }
+
+        let preview = make_preview(content);
+        let secs = timestamp_ms / 1000;
+        let nsecs = ((timestamp_ms % 1000) * 1_000_000) as u32;
+        let created_at = chrono::DateTime::from_timestamp(secs, nsecs)
+            .unwrap_or_else(|| chrono::Utc::now())
+            .to_rfc3339();
+
+        let new_row = NewClipboardRow {
+            content,
+            preview: &preview,
+            created_at: &created_at,
+        };
+        diesel::insert_into(dsl::clipboard_history)
+            .values(&new_row)
+            .execute(&mut self.conn)?;
+
+        Ok(Some(()))
     }
 }
 
@@ -267,5 +335,75 @@ mod tests {
 
         assert_eq!(record.preview.chars().count(), 101); // 100 + …
         assert!(record.preview.ends_with('…'));
+    }
+
+    // --- sync_meta ---
+
+    #[test]
+    fn sync_meta_初始状态返回none() {
+        let mut db = test_db();
+        assert_eq!(db.get_sync_meta("gist_id"), None);
+        assert_eq!(db.get_sync_meta("version"), None);
+    }
+
+    #[test]
+    fn sync_meta_设置后可读取() {
+        let mut db = test_db();
+        db.set_sync_meta("gist_id", "abc123").expect("set failed");
+        assert_eq!(db.get_sync_meta("gist_id"), Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn sync_meta_覆盖更新() {
+        let mut db = test_db();
+        db.set_sync_meta("version", "1").expect("set failed");
+        db.set_sync_meta("version", "2").expect("set failed");
+        assert_eq!(db.get_sync_meta("version"), Some("2".to_string()));
+    }
+
+    #[test]
+    fn sync_meta_多个key独立存储() {
+        let mut db = test_db();
+        db.set_sync_meta("gist_id", "gist_abc").expect("set failed");
+        db.set_sync_meta("version", "5").expect("set failed");
+        db.set_sync_meta("last_sync_at", "20260601120000").expect("set failed");
+        assert_eq!(db.get_sync_meta("gist_id"), Some("gist_abc".to_string()));
+        assert_eq!(db.get_sync_meta("version"), Some("5".to_string()));
+        assert_eq!(db.get_sync_meta("last_sync_at"), Some("20260601120000".to_string()));
+    }
+
+    // --- insert_with_timestamp ---
+
+    #[test]
+    fn insert_with_timestamp_插入指定时间戳记录() {
+        let mut db = test_db();
+        let ts: i64 = 1700000000000;
+        let result = db.insert_with_timestamp("hello", ts).expect("insert failed");
+        assert!(result.is_some());
+        let records = db.load_all().expect("load failed");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].content, "hello");
+    }
+
+    #[test]
+    fn insert_with_timestamp_重复内容不插入() {
+        let mut db = test_db();
+        let ts1: i64 = 1700000000000;
+        let ts2: i64 = 1700000001000;
+        let r1 = db.insert_with_timestamp("dup", ts1).expect("insert failed");
+        assert!(r1.is_some());
+        let r2 = db.insert_with_timestamp("dup", ts2).expect("insert failed");
+        assert!(r2.is_none());
+        let records = db.load_all().expect("load failed");
+        assert_eq!(records.len(), 1);
+    }
+
+    #[test]
+    fn insert_with_timestamp_不同内容正常插入() {
+        let mut db = test_db();
+        db.insert_with_timestamp("a", 1700000000000).expect("insert failed");
+        db.insert_with_timestamp("b", 1700000001000).expect("insert failed");
+        let records = db.load_all().expect("load failed");
+        assert_eq!(records.len(), 2);
     }
 }
