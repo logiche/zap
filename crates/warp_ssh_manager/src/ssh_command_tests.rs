@@ -164,3 +164,71 @@ fn build_ssh_args_does_not_emit_sshpass() {
         "build_ssh_args must not emit sshpass; got {args:?}"
     );
 }
+
+// -------- password auth cmd_args 回归保护 --------
+//
+// 这些测试守住"测试连接"password 路径不再 10s timeout 的关键开关。
+// 任何 `test_password_auth` 内部的 -o 选项调整都得满足这三条:
+// 1. 不再声明 keyboard-interactive(否则 server 端 PAM 会 fallback 到 kbd-int)
+// 2. 显式禁掉 KbdInteractiveAuthentication(客户端能力开关,不是偏好)
+// 3. 末尾仍是 `echo ok` 远端命令(否则成功判定匹配不到 stdout)
+// author: logic
+// date: 2026-06-01
+
+/// 回归保护:`PreferredAuthentications` 必须只含 `password`,不能含
+/// `keyboard-interactive`。否则 stdin pipe + EOF 会触发 kbd-int PAM
+/// 重试链(`pam_faildelay` ~2s/次),把 10s `TEST_TIMEOUT` 顶满。
+#[test]
+fn password_auth_args_no_keyboard_interactive() {
+    let s = server();
+    let args = build_password_auth_cmd_args(&s);
+    let joined = args.join(" ");
+    assert!(
+        !joined.contains("keyboard-interactive"),
+        "test_password_auth must NOT use keyboard-interactive; got {args:?}"
+    );
+    assert!(
+        joined.contains("PreferredAuthentications=password"),
+        "expected PreferredAuthentications=password; got {args:?}"
+    );
+    // 即便 PreferredAuthentications=password 出现,后面也不能再列其它方法。
+    // split 取 "=" 后第一段,若以 "password," 开头说明后面还有别的认证。
+    let after_pref = joined
+        .split("PreferredAuthentications=")
+        .nth(1)
+        .unwrap_or("");
+    assert!(
+        !after_pref.starts_with("password,"),
+        "PreferredAuthentications should not list other methods after password; got {args:?}"
+    );
+}
+
+/// 回归保护:必须显式禁 kbd-interactive(客户端能力开关),
+/// 不只靠 `PreferredAuthentications` 列表顺序(后者只约束 password
+/// 子方法)。OpenSSH 8.2+ 行为差异、与 server 端 `AuthenticationMethods`
+/// 交互时尤其需要这层 defense in depth。
+#[test]
+fn password_auth_args_disable_kbd_interactive() {
+    let s = server();
+    let args = build_password_auth_cmd_args(&s);
+    let joined = args.join(" ");
+    assert!(
+        joined.contains("KbdInteractiveAuthentication=no"),
+        "missing KbdInteractiveAuthentication=no; got {args:?}"
+    );
+}
+
+/// 回归保护:cmd_args 末尾的 `echo ok` 必须作为 remote command 出现。
+/// ssh 解析规则下 destination 之后第一个非选项位置参数 = remote command,
+/// 如果选项顺序错了导致 ssh 不把 `echo ok` 识别为命令,成功判定会失效。
+#[test]
+fn password_auth_args_ends_with_echo_ok_command() {
+    let s = server();
+    let args = build_password_auth_cmd_args(&s);
+    assert!(!args.is_empty(), "cmd_args is empty: {args:?}");
+    let last = args.last().unwrap();
+    assert_eq!(
+        last, "echo ok",
+        "cmd_args must end with `echo ok` as remote command; got {args:?}"
+    );
+}
