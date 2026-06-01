@@ -24,6 +24,8 @@ pub struct ClipboardHistoryModel {
     watcher: Option<ClipboardWatcher>,
     /// 引用计数：跟踪有多少个 Pane 在使用 watcher
     watcher_ref_count: usize,
+    /// Gitee 同步 token
+    sync_token: Option<String>,
 }
 
 impl Entity for ClipboardHistoryModel {
@@ -54,6 +56,7 @@ impl ClipboardHistoryModel {
             max_records: DEFAULT_MAX_RECORDS,
             watcher: None,
             watcher_ref_count: 0,
+            sync_token: None,
         })
     }
 
@@ -67,6 +70,7 @@ impl ClipboardHistoryModel {
             max_records: DEFAULT_MAX_RECORDS,
             watcher: None,
             watcher_ref_count: 0,
+            sync_token: None,
         })
     }
 
@@ -172,6 +176,79 @@ impl ClipboardHistoryModel {
     fn on_clipboard_content(&mut self, content: String, ctx: &mut ModelContext<Self>) {
         let _ = self.add_record(content);
         ctx.notify();
+    }
+
+    // ==================== 云同步相关 ====================
+
+    /// 设置同步 token（空字符串清除）
+    pub fn set_sync_token(&mut self, token: String) {
+        if token.is_empty() {
+            self.sync_token = None;
+        } else {
+            self.sync_token = Some(token);
+        }
+    }
+
+    /// 获取同步 token
+    pub fn get_sync_token(&self) -> Option<&str> {
+        self.sync_token.as_deref()
+    }
+
+    /// 获取当前同步版本号（从 sync_meta 读取）
+    pub fn get_sync_version(&mut self) -> i64 {
+        self.db
+            .get_sync_meta("version")
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0)
+    }
+
+    /// 设置同步版本号
+    pub fn set_sync_version(&mut self, version: i64) -> anyhow::Result<()> {
+        self.db.set_sync_meta("version", &version.to_string())
+    }
+
+    /// 获取同步 Gist ID
+    pub fn get_sync_gist_id(&mut self) -> Option<String> {
+        self.db.get_sync_meta("gist_id")
+    }
+
+    /// 设置同步 Gist ID
+    pub fn set_sync_gist_id(&mut self, gist_id: &str) -> anyhow::Result<()> {
+        self.db.set_sync_meta("gist_id", gist_id)
+    }
+
+    /// 获取当前所有记录的内容集合（用于下载去重）
+    pub fn existing_contents(&self) -> std::collections::HashSet<String> {
+        self.records.iter().map(|r| r.content.clone()).collect()
+    }
+
+    /// 获取最近 N 条记录快照（用于上传）
+    pub fn recent_records_snapshot(&self) -> Vec<ClipboardRecord> {
+        self.records.iter().take(crate::sync::sync_limit()).cloned().collect()
+    }
+
+    /// 应用下载合并结果（插入新条目，使用云端时间戳）
+    ///
+    /// 返回实际新增的条目数
+    pub fn apply_sync_download(
+        &mut self,
+        items: &[(String, i64)],
+    ) -> anyhow::Result<usize> {
+        let mut added = 0;
+        for (content, timestamp_ms) in items {
+            if self.records.iter().any(|r| r.content == *content) {
+                continue;
+            }
+            if self.db.insert_with_timestamp(content, *timestamp_ms)?.is_some() {
+                added += 1;
+            }
+        }
+        self.records = self.db.load_all()?;
+        let evicted = self.db.evict_oldest(self.max_records)?;
+        if !evicted.is_empty() {
+            self.records.retain(|r| !evicted.contains(&r.id));
+        }
+        Ok(added)
     }
 }
 
@@ -451,5 +528,103 @@ mod tests {
         let event = model.add_record(content.clone()).expect("add failed");
         assert!(event.is_some());
         assert_eq!(model.records()[0].content, content);
+    }
+
+    // --- sync token ---
+
+    #[test]
+    fn set_sync_token_设置后可获取() {
+        let mut model = test_model();
+        model.set_sync_token("my_token".to_string());
+        assert_eq!(model.get_sync_token(), Some("my_token"));
+    }
+
+    #[test]
+    fn set_sync_token_空字符串清除token() {
+        let mut model = test_model();
+        model.set_sync_token("token".to_string());
+        model.set_sync_token(String::new());
+        assert_eq!(model.get_sync_token(), None);
+    }
+
+    #[test]
+    fn get_sync_token_未设置返回none() {
+        let model = test_model();
+        assert_eq!(model.get_sync_token(), None);
+    }
+
+    // --- sync meta ---
+
+    #[test]
+    fn get_sync_version_初始为0() {
+        let mut model = test_model();
+        assert_eq!(model.get_sync_version(), 0);
+    }
+
+    #[test]
+    fn set_sync_version_更新后可读取() {
+        let mut model = test_model();
+        model.set_sync_version(5).expect("set failed");
+        assert_eq!(model.get_sync_version(), 5);
+    }
+
+    #[test]
+    fn get_sync_gist_id_初始为none() {
+        let mut model = test_model();
+        assert_eq!(model.get_sync_gist_id(), None);
+    }
+
+    #[test]
+    fn set_sync_gist_id_更新后可读取() {
+        let mut model = test_model();
+        model.set_sync_gist_id("gist_abc123").expect("set failed");
+        assert_eq!(model.get_sync_gist_id(), Some("gist_abc123".to_string()));
+    }
+
+    // --- apply sync download ---
+
+    #[test]
+    fn apply_sync_download_新增不重复条目() {
+        let mut model = test_model();
+        model.add_record("existing".to_string()).expect("add failed");
+
+        let items = vec![
+            ("new_item".to_string(), 1700000000000_i64),
+            ("existing".to_string(), 1700000001000_i64), // 重复
+        ];
+        let added = model.apply_sync_download(&items).expect("apply failed");
+        assert_eq!(added, 1);
+        assert_eq!(model.records().len(), 2);
+        assert!(model.records().iter().any(|r| r.content == "new_item"));
+    }
+
+    #[test]
+    fn apply_sync_download_全部重复返回0() {
+        let mut model = test_model();
+        model.add_record("dup".to_string()).expect("add failed");
+
+        let items = vec![("dup".to_string(), 1700000000000_i64)];
+        let added = model.apply_sync_download(&items).expect("apply failed");
+        assert_eq!(added, 0);
+        assert_eq!(model.records().len(), 1);
+    }
+
+    #[test]
+    fn apply_sync_download_空列表返回0() {
+        let mut model = test_model();
+        let added = model.apply_sync_download(&[]).expect("apply failed");
+        assert_eq!(added, 0);
+    }
+
+    #[test]
+    fn existing_contents_返回所有内容() {
+        let mut model = test_model();
+        model.add_record("aaa".to_string()).expect("add failed");
+        model.add_record("bbb".to_string()).expect("add failed");
+
+        let contents = model.existing_contents();
+        assert_eq!(contents.len(), 2);
+        assert!(contents.contains("aaa"));
+        assert!(contents.contains("bbb"));
     }
 }
