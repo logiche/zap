@@ -377,7 +377,7 @@ mod tests {
             updated_at: "20260601120000".to_string(),
             items: vec![CloudClipboardItem {
                 content: "encrypted_content".to_string(),
-                timestamp: 1700000000000,
+                timestamp: 1700000000000_i64,
             }],
         };
         let json = serde_json::to_string(&data).expect("serialize failed");
@@ -385,7 +385,7 @@ mod tests {
         assert_eq!(parsed.version, 1);
         assert_eq!(parsed.updated_at, "20260601120000");
         assert_eq!(parsed.items.len(), 1);
-        assert_eq!(parsed.items[0].timestamp, 1700000000000);
+        assert_eq!(parsed.items[0].timestamp, 1700000000000_i64);
     }
 
     #[test]
@@ -443,7 +443,7 @@ mod tests {
             id: 1,
             content: "hello world".to_string(),
             preview: "hello world".to_string(),
-            created_at: chrono::DateTime::from_timestamp_millis(1700000000000).unwrap(),
+            created_at: chrono::DateTime::from_timestamp_millis(1700000000000_i64).unwrap(),
         }];
         let json = serialize_records(&records, 1, TEST_TOKEN).expect("serialize failed");
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse failed");
@@ -461,13 +461,13 @@ mod tests {
                 id: 1,
                 content: "hello".to_string(),
                 preview: "hello".to_string(),
-                created_at: chrono::DateTime::from_timestamp_millis(1700000000000).unwrap(),
+                created_at: chrono::DateTime::from_timestamp_millis(1700000000000_i64).unwrap(),
             },
             ClipboardRecord {
                 id: 2,
                 content: "world".to_string(),
                 preview: "world".to_string(),
-                created_at: chrono::DateTime::from_timestamp_millis(1700000001000).unwrap(),
+                created_at: chrono::DateTime::from_timestamp_millis(1700000001000_i64).unwrap(),
             },
         ];
         let json = serialize_records(&records, 3, TEST_TOKEN).expect("serialize failed");
@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(version, 3);
         assert_eq!(new_items.len(), 1);
         assert_eq!(new_items[0].0, "world");
-        assert_eq!(new_items[0].1, 1700000001000);
+        assert_eq!(new_items[0].1, 1700000001000_i64);
     }
 
     #[test]
@@ -489,7 +489,7 @@ mod tests {
             id: 1,
             content: "dup".to_string(),
             preview: "dup".to_string(),
-            created_at: chrono::DateTime::from_timestamp_millis(1700000000000).unwrap(),
+            created_at: chrono::DateTime::from_timestamp_millis(1700000000000_i64).unwrap(),
         }];
         let json = serialize_records(&records, 1, TEST_TOKEN).expect("serialize failed");
 
@@ -507,7 +507,7 @@ mod tests {
             id: 1,
             content: "secret".to_string(),
             preview: "secret".to_string(),
-            created_at: chrono::DateTime::from_timestamp_millis(1700000000000).unwrap(),
+            created_at: chrono::DateTime::from_timestamp_millis(1700000000000_i64).unwrap(),
         }];
         let json = serialize_records(&records, 1, TEST_TOKEN).expect("serialize failed");
 
@@ -522,7 +522,7 @@ mod tests {
                 id: i,
                 content: format!("item{i}"),
                 preview: format!("item{i}"),
-                created_at: chrono::DateTime::from_timestamp_millis(1700000000000 + i * 1000)
+                created_at: chrono::DateTime::from_timestamp_millis(1700000000000_i64 + i * 1000)
                     .unwrap(),
             })
             .collect();
@@ -549,7 +549,7 @@ mod tests {
             id: 1,
             content: "test content".to_string(),
             preview: "test content".to_string(),
-            created_at: chrono::DateTime::from_timestamp_millis(1700000000000).unwrap(),
+            created_at: chrono::DateTime::from_timestamp_millis(1700000000000_i64).unwrap(),
         }];
         let json = serialize_records(&records, 1, TEST_TOKEN).expect("serialize failed");
         let parsed: CloudClipboardData = serde_json::from_str(&json).expect("parse failed");
@@ -564,13 +564,13 @@ mod tests {
                 id: 1,
                 content: "aaa".to_string(),
                 preview: "aaa".to_string(),
-                created_at: chrono::DateTime::from_timestamp_millis(1700000000000).unwrap(),
+                created_at: chrono::DateTime::from_timestamp_millis(1700000000000_i64).unwrap(),
             },
             ClipboardRecord {
                 id: 2,
                 content: "bbb".to_string(),
                 preview: "bbb".to_string(),
-                created_at: chrono::DateTime::from_timestamp_millis(1700000001000).unwrap(),
+                created_at: chrono::DateTime::from_timestamp_millis(1700000001000_i64).unwrap(),
             },
         ];
         let json = serialize_records(&records, 4, TEST_TOKEN).expect("serialize failed");
@@ -590,13 +590,13 @@ mod tests {
                 id: 1,
                 content: "cloud_a".to_string(),
                 preview: "cloud_a".to_string(),
-                created_at: chrono::DateTime::from_timestamp_millis(1700000000000).unwrap(),
+                created_at: chrono::DateTime::from_timestamp_millis(1700000000000_i64).unwrap(),
             },
             ClipboardRecord {
                 id: 2,
                 content: "cloud_b".to_string(),
                 preview: "cloud_b".to_string(),
-                created_at: chrono::DateTime::from_timestamp_millis(1700000001000).unwrap(),
+                created_at: chrono::DateTime::from_timestamp_millis(1700000001000_i64).unwrap(),
             },
         ];
         let cloud_json = serialize_records(&records, 5, TEST_TOKEN).expect("serialize failed");
@@ -615,7 +615,7 @@ mod tests {
             id: 1,
             content: "x".to_string(),
             preview: "x".to_string(),
-            created_at: chrono::DateTime::from_timestamp_millis(1700000000000).unwrap(),
+            created_at: chrono::DateTime::from_timestamp_millis(1700000000000_i64).unwrap(),
         }];
         let cloud_json = serialize_records(&records, 3, TEST_TOKEN).expect("serialize failed");
         let data: CloudClipboardData = serde_json::from_str(&cloud_json).expect("parse failed");
@@ -628,7 +628,7 @@ mod tests {
             id: 1,
             content: "x".to_string(),
             preview: "x".to_string(),
-            created_at: chrono::DateTime::from_timestamp_millis(1700000000000).unwrap(),
+            created_at: chrono::DateTime::from_timestamp_millis(1700000000000_i64).unwrap(),
         }];
         let json = serialize_records(&records, 1, TEST_TOKEN).expect("serialize failed");
         let data: CloudClipboardData = serde_json::from_str(&json).expect("parse failed");
