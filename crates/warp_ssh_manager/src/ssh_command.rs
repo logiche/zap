@@ -117,30 +117,10 @@ async fn test_password_auth(
 ) -> Result<(), String> {
     let password = password.ok_or("Password not provided")?;
 
-    // 构造 ssh 命令参数。build_ssh_args 第一项是 "ssh" 程序名,我们用
-    // Command::new("ssh") 显式派生,所以这里跳过头部。`BatchMode=no` 强制
-    // ssh 走交互模式才能从 stdin 读密码;`NumberOfPasswordPrompts=1` 把
-    // 重试窗口锁到 1 次;`PreferredAuthentications` 屏蔽公钥 / GSSAPI 等
-    // 其他认证方式,避免我们误把公钥成功当成"密码对"。
-    let mut cmd_args: Vec<String> = build_ssh_args(server)
-        .into_iter()
-        .skip(1)
-        .collect();
-    cmd_args.extend([
-        "-o".into(),
-        "BatchMode=no".into(),
-        "-o".into(),
-        "PreferredAuthentications=password,keyboard-interactive".into(),
-        "-o".into(),
-        "NumberOfPasswordPrompts=1".into(),
-        "-o".into(),
-        "ConnectTimeout=5".into(),
-        "-o".into(),
-        "StrictHostKeyChecking=no".into(),
-        "-o".into(),
-        "LogLevel=ERROR".into(),
-        "echo ok".into(),
-    ]);
+    // 构造 ssh 命令参数。`build_password_auth_cmd_args` 集中处理所有
+    // -o 选项,包括关键的 `PreferredAuthentications=password` 和
+    // `KbdInteractiveAuthentication=no`(见该函数注释)。
+    let cmd_args = build_password_auth_cmd_args(server);
 
     // 准备 stdin 缓冲:密码 + 换行。Zeroizing 包裹,作用域结束自动归零。
     let stdin_bytes = build_password_auth_stdin(&password);
@@ -176,19 +156,39 @@ async fn test_password_auth(
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_trimmed = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    // 始终把 ssh 真实 stderr 落日志,即便成功也留痕,便于事后排查
+    // "为什么 server 接受了 password 但 UI 报成功"的差异。
+    if !stderr_trimmed.is_empty() {
+        log::warn!("ssh test stderr: {stderr_trimmed}");
+    }
 
     // 成功判定:严格匹配 `echo ok` 的输出。原先 `ends_with("ok")` 的兜底
     // 会让 banner / motd 末尾碰巧以 "ok" 结尾时误判为成功,这里去掉。
     if output.status.success() && stdout.trim() == "ok" {
         Ok(())
-    } else if stderr.contains("Permission denied") || stderr.contains("Authentication failed") {
-        Err("Authentication failed: wrong password".into())
+    } else if stderr_trimmed.contains("Permission denied")
+        || stderr_trimmed.contains("Authentication failed")
+    {
+        // 错误信息带上精简 stderr(<= 200 字符),便于用户判断 server 端
+        // 是没启 password、还是配置了 kbd-only AuthenticationMethods 等。
+        let detail = if stderr_trimmed.is_empty() {
+            String::new()
+        } else {
+            let snippet: String = stderr_trimmed.chars().take(200).collect();
+            if stderr_trimmed.chars().count() > 200 {
+                format!(" ({snippet}...)")
+            } else {
+                format!(" ({snippet})")
+            }
+        };
+        Err(format!("Authentication failed: wrong password{detail}"))
     } else {
         Err(format!(
             "Unexpected output: stdout={} stderr={}",
             stdout.trim(),
-            stderr.trim()
+            stderr_trimmed
         ))
     }
 }
@@ -200,6 +200,54 @@ fn build_password_auth_stdin(password: &Zeroizing<String>) -> Zeroizing<Vec<u8>>
     v.extend_from_slice(password.as_bytes());
     v.push(b'\n');
     v
+}
+
+/// 拼出 password 认证测试时给 ssh 子进程的完整 argv。
+///
+/// 与 `build_ssh_args` 不同:这里跳过首项 `"ssh"`(我们用
+/// `Command::new("ssh")` 显式派生),追加测试用 `-o` 选项和 `echo ok` 远端命令。
+///
+/// 关键选项含义:
+/// - `BatchMode=no`:允许 ssh 从 stdin 读密码(我们用 pipe 注入,不走 askpass)
+/// - `PreferredAuthentications=password`:**只**声明想试 password,不带
+///   `keyboard-interactive`。否则 server 端 PAM 在 password 之后会触发
+///   kbd-interactive fallback,而我们的 stdin 在写完密码后已 EOF,kbd-int
+///   子 prompt 拿不到响应,会逐项重试并触发 `pam_faildelay`(~2s/次),
+///   累计 ~8-10s 顶满 `TEST_TIMEOUT`。
+/// - `KbdInteractiveAuthentication=no`:客户端能力开关,直接禁掉整个 kbd-int
+///   协议。光靠 `PreferredAuthentications` 不够——它只约束 password 子方法的
+///   prompt 次数,kbd-int 仍可走;两个开关都设才是 defense in depth。
+/// - `NumberOfPasswordPrompts=1`:password 子方法只允许 1 次重试。
+/// - `ConnectTimeout=5`:单次 TCP 连接超时。
+/// - `StrictHostKeyChecking=no`:不拦 known_hosts(测试场景下避免 host key
+///   变化导致误报,真实终端连接走别的路径)。
+/// - `LogLevel=ERROR`:抑制 host key 提示 / banner 等噪音。
+///
+/// `echo ok` 作为远端命令,严格匹配 stdout 判定成功(避免 banner / motd
+/// 末尾恰好含 "ok" 的误判)。
+///
+/// author: logic
+/// date: 2026-06-01
+fn build_password_auth_cmd_args(server: &SshServerInfo) -> Vec<String> {
+    let mut args: Vec<String> = build_ssh_args(server).into_iter().skip(1).collect();
+    args.extend([
+        "-o".into(),
+        "BatchMode=no".into(),
+        "-o".into(),
+        "PreferredAuthentications=password".into(),
+        "-o".into(),
+        "KbdInteractiveAuthentication=no".into(),
+        "-o".into(),
+        "NumberOfPasswordPrompts=1".into(),
+        "-o".into(),
+        "ConnectTimeout=5".into(),
+        "-o".into(),
+        "StrictHostKeyChecking=no".into(),
+        "-o".into(),
+        "LogLevel=ERROR".into(),
+        "echo ok".into(),
+    ]);
+    args
 }
 
 async fn run_ssh_test(args: &[String]) -> Result<String, std::io::Error> {
