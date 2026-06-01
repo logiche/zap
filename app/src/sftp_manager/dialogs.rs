@@ -18,7 +18,7 @@ use warpui::ViewHandle;
 
 use crate::editor::EditorView;
 use crate::sftp_manager::browser::SftpBrowserAction;
-use crate::sftp_manager::types::{format_size, Dialog, FileEntry};
+use crate::sftp_manager::types::{format_size, Dialog, FileEntry, TransferDirection};
 
 /// 对话框最大宽度
 const DIALOG_MAX_WIDTH: f32 = 360.0;
@@ -515,6 +515,7 @@ fn render_overwrite_confirm(
     _source: &PathBuf,
     target: &PathBuf,
     _file_size: u64,
+    direction: TransferDirection,
     appearance: &Appearance,
     confirm_btn_state: MouseStateHandle,
     cancel_btn_state: MouseStateHandle,
@@ -524,7 +525,10 @@ fn render_overwrite_confirm(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-    let desc = format!("目标文件 {target_name} 已存在，是否覆盖？");
+    let desc = match direction {
+        TransferDirection::Upload => format!("远程文件 {target_name} 已存在，是否覆盖？"),
+        TransferDirection::Download => format!("目标文件 {target_name} 已存在，是否覆盖？"),
+    };
 
     render_confirm_dialog(
         "确认覆盖",
@@ -567,8 +571,8 @@ pub fn render_dialog(
         Dialog::Move { source, target_dir } => {
             render_move_dialog(source, target_dir, appearance, confirm_btn_state, cancel_btn_state, close_btn_state)
         }
-        Dialog::OverwriteConfirm { source, target, file_size } => {
-            render_overwrite_confirm(source, target, *file_size, appearance, confirm_btn_state, cancel_btn_state, close_btn_state)
+        Dialog::OverwriteConfirm { source, target, file_size, direction } => {
+            render_overwrite_confirm(source, target, *file_size, *direction, appearance, confirm_btn_state, cancel_btn_state, close_btn_state)
         }
         Dialog::CloseTransferPanelConfirm => {
             render_confirm_dialog(

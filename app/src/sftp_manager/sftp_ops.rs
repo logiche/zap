@@ -207,6 +207,24 @@ pub fn upload_file_streaming(
                     native: false,
                 },
             );
+
+            // 部分服务器不支持 OVERWRITE 标志，回退到先删除目标文件再重命名
+            let rename_result = match rename_result {
+                Ok(()) => Ok(()),
+                Err(_) => {
+                    let _ = sftp.remove_file(remote_path);
+                    sftp.rename(
+                        &temp_remote_path,
+                        remote_path,
+                        zap_sftp::types::RenameOptions {
+                            overwrite: false,
+                            atomic: false,
+                            native: false,
+                        },
+                    )
+                }
+            };
+
             if let Err(e) = rename_result {
                 // rename 失败时保留远程临时文件，避免数据丢失
                 return Err(SftpOpsError::Operation(

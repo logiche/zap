@@ -1276,6 +1276,7 @@ fn test_overwrite_confirm_dialog() {
                 source: PathBuf::from("/source.txt"),
                 target: PathBuf::from("/target.txt"),
                 file_size: 1,
+                direction: TransferDirection::Download,
             });
             ctx.notify();
         });
@@ -1334,7 +1335,9 @@ fn test_move_confirm_dialog() {
 fn test_upload_creates_transfer_task() {
     warpui::App::test((), |mut app| async move {
         let temp = create_temp_dir_with_files(&[]);
-        let local_file = temp.path().join("upload_source.txt");
+        // 本地文件放在独立临时目录中，避免被 InMemorySftpBackend 的 list_dir 列出
+        let local_dir = tempfile::tempdir().expect("创建本地临时目录失败");
+        let local_file = local_dir.path().join("upload_source.txt");
         std::fs::write(&local_file, b"upload content").unwrap();
 
         initialize_app(&mut app);
@@ -1535,7 +1538,9 @@ fn test_drag_leave_hides_overlay() {
 fn test_drop_files_creates_upload_tasks() {
     warpui::App::test((), |mut app| async move {
         let temp = create_temp_dir_with_files(&[]);
-        let drop_file = temp.path().join("dropped.txt");
+        // 本地文件放在独立临时目录中，避免被 InMemorySftpBackend 的 list_dir 列出
+        let local_dir = tempfile::tempdir().expect("创建本地临时目录失败");
+        let drop_file = local_dir.path().join("dropped.txt");
         std::fs::write(&drop_file, b"dropped content").unwrap();
 
         initialize_app(&mut app);

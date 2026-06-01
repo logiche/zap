@@ -135,6 +135,7 @@ pub enum Dialog {
         source: PathBuf,
         target: PathBuf,
         file_size: u64,
+        direction: TransferDirection,
     },
     FileDetails { entry: FileEntry },
     /// 关闭传输面板确认（有活跃传输时）
@@ -390,6 +391,7 @@ mod tests {
             source: PathBuf::from("/home/user/file.txt"),
             target: PathBuf::from("/home/user/file_copy.txt"),
             file_size: 1024,
+            direction: TransferDirection::Download,
         };
         assert!(matches!(dialog, Dialog::OverwriteConfirm { .. }));
     }

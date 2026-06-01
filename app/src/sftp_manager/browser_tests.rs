@@ -17,7 +17,7 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use pathfinder_geometry::vector::Vector2F;
 
 use super::browser::{SftpBrowserAction, SftpBrowserView};
-use super::types::{ConnectionState, Dialog, TransferState};
+use super::types::{ConnectionState, Dialog, TransferDirection, TransferState};
 use crate::editor::EditorView;
 
 /// 初始化测试所需的最小单例集合
@@ -1043,6 +1043,7 @@ fn test_confirm_overwrite_closes_dialog() {
                 source: PathBuf::from("/a"),
                 target: PathBuf::from("/b"),
                 file_size: 0,
+                direction: TransferDirection::Download,
             });
             view.handle_action(&SftpBrowserAction::ConfirmOverwrite, ctx);
         });
