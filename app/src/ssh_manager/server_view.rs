@@ -31,7 +31,7 @@ use crate::ssh_manager::{SshTreeChangedEvent, SshTreeChangedNotifier};
 
 use warp_ssh_manager::{
     AuthType, ConnectionStatus, KeychainSecretStore, NodeKind, SecretKind, SshNode, SshRepository,
-    SshSecretStore, SshServerInfo,
+    SshSecretStore, SshSecretStoreError, SshServerInfo,
 };
 use zeroize::Zeroizing;
 
@@ -262,8 +262,22 @@ impl SshServerView {
             // 注意:不展示明文密码,只在 keychain 里"存在"时给一个全是 • 的占位 — 不
             // 影响保存语义(空字符串保持密码不变;非空字符串覆盖)。
             // 这里直接清空 buffer,密码保留在 keychain 里;Save 时只在 buffer 非空才写。
+            // 占位模式镜像 root_password_editor(keychain 已存 → "●●●●●●●";
+            // 未存 → 回到 new() 时设的 "•••••••"),给用户一个"留空也能 Test"
+            // 的视觉提示。
+            let pw_saved = KeychainSecretStore
+                .get(&srv.node_id, SecretKind::Password)
+                .unwrap_or(None)
+                .is_some();
             self.password_editor
-                .update(ctx, |e, ctx| e.set_buffer_text("", ctx));
+                .update(ctx, |e, ctx| {
+                    e.set_buffer_text("", ctx);
+                    if pw_saved {
+                        e.set_placeholder_text("●●●●●●●", ctx);
+                    } else {
+                        e.set_placeholder_text("•••••••", ctx);
+                    }
+                });
             let startup_command = srv.startup_command.clone().unwrap_or_default();
             self.startup_command_editor
                 .update(ctx, |e, ctx| e.set_buffer_text(&startup_command, ctx));
@@ -492,12 +506,9 @@ impl SshServerView {
         };
 
         // 密码立即用 Zeroizing 包裹,确保从 UI 文本框取出后全程内存零化,
-        // 直到 async 测试任务结束 drop。Empty 表示用户没填,按 None 处理。
-        let password: Option<Zeroizing<String>> = if password.is_empty() {
-            None
-        } else {
-            Some(Zeroizing::new(password))
-        };
+        // 直到 async 测试任务结束 drop。优先级:form 值 > keychain > None。
+        // 详见 `resolve_test_password` 注释。
+        let password = resolve_test_password(&self.node_id, &password, &KeychainSecretStore);
 
         self.is_testing = true;
         self.status = None;
@@ -1160,5 +1171,151 @@ impl BackingView for SshServerView {
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {
         self.focus_handle = Some(focus_handle);
+    }
+}
+
+/// 解析"测试连接"用的密码来源,优先级固化:
+/// 1. form 文本非空 → 用 form 值(用户已敲,**不要求**先 Save)
+/// 2. form 空 + keychain 有 → 用 keychain 存的值
+/// 3. form 空 + keychain 无/错 → `None`,后端会返 "Password not provided"
+///
+/// form 永远胜过 keychain — 用户改 host/port 后想测,正在敲的密码就是
+/// 新 host 的,不应被旧 keychain 值盖掉。
+///
+/// author: logic
+/// date: 2026-06-01
+fn resolve_test_password(
+    node_id: &str,
+    editor_text: &str,
+    store: &dyn SshSecretStore,
+) -> Option<Zeroizing<String>> {
+    if !editor_text.is_empty() {
+        return Some(Zeroizing::new(editor_text.to_string()));
+    }
+    match store.get(node_id, SecretKind::Password) {
+        Ok(Some(secret)) => Some(secret),
+        Ok(None) => None,
+        Err(SshSecretStoreError::NoBackend) => None,
+        Err(SshSecretStoreError::Keyring(msg)) => {
+            log::warn!("keychain 读取失败,fallback 失败: {msg}");
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    /// 进程内 mock,绕开 OS keychain。支持错误注入,模拟 NoBackend / Keyring 错。
+    struct MockSecretStore {
+        inner: Mutex<HashMap<String, String>>,
+        get_err: Mutex<Option<SshSecretStoreError>>,
+    }
+
+    impl MockSecretStore {
+        fn new() -> Self {
+            Self {
+                inner: Mutex::new(HashMap::new()),
+                get_err: Mutex::new(None),
+            }
+        }
+
+        fn with_secret(node: &str, kind: SecretKind, value: &str) -> Self {
+            let s = Self::new();
+            s.set(node, kind, value).unwrap();
+            s
+        }
+
+        fn inject_get_error(&self, err: SshSecretStoreError) {
+            *self.get_err.lock().unwrap() = Some(err);
+        }
+    }
+
+    fn account_key(node_id: &str, kind: SecretKind) -> String {
+        let suffix = match kind {
+            SecretKind::Password => "password",
+            SecretKind::Passphrase => "passphrase",
+            SecretKind::RootPassword => "root_password",
+        };
+        format!("{node_id}:{suffix}")
+    }
+
+    impl SshSecretStore for MockSecretStore {
+        fn set(
+            &self,
+            node_id: &str,
+            kind: SecretKind,
+            secret: &str,
+        ) -> Result<(), SshSecretStoreError> {
+            self.inner
+                .lock()
+                .unwrap()
+                .insert(account_key(node_id, kind), secret.to_string());
+            Ok(())
+        }
+
+        fn get(
+            &self,
+            node_id: &str,
+            kind: SecretKind,
+        ) -> Result<Option<Zeroizing<String>>, SshSecretStoreError> {
+            if let Some(err) = self.get_err.lock().unwrap().take() {
+                return Err(err);
+            }
+            Ok(self
+                .inner
+                .lock()
+                .unwrap()
+                .get(&account_key(node_id, kind))
+                .cloned()
+                .map(Zeroizing::new))
+        }
+
+        fn delete(
+            &self,
+            _node_id: &str,
+            _kind: SecretKind,
+        ) -> Result<(), SshSecretStoreError> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn empty_editor_empty_store_returns_none() {
+        let store = MockSecretStore::new();
+        assert!(resolve_test_password("n1", "", &store).is_none());
+    }
+
+    #[test]
+    fn empty_editor_stored_returns_secret() {
+        let store = MockSecretStore::with_secret("n1", SecretKind::Password, "from-keychain");
+        let pw = resolve_test_password("n1", "", &store).unwrap();
+        assert_eq!(&*pw, "from-keychain");
+    }
+
+    #[test]
+    fn filled_editor_ignores_keychain() {
+        // keychain 存了旧密码,form 敲了新密码 → 必须用 form 的新密码,
+        // 否则用户改 host 后测试会被旧密码污染。
+        let store = MockSecretStore::with_secret("n1", SecretKind::Password, "old-pw");
+        let pw = resolve_test_password("n1", "new-pw", &store).unwrap();
+        assert_eq!(&*pw, "new-pw");
+    }
+
+    #[test]
+    fn empty_editor_no_backend_returns_none() {
+        let store = MockSecretStore::new();
+        store.inject_get_error(SshSecretStoreError::NoBackend);
+        assert!(resolve_test_password("n1", "", &store).is_none());
+    }
+
+    #[test]
+    fn empty_editor_keyring_error_returns_none() {
+        let store = MockSecretStore::new();
+        store.inject_get_error(SshSecretStoreError::Keyring("locked".into()));
+        assert!(resolve_test_password("n1", "", &store).is_none());
     }
 }
