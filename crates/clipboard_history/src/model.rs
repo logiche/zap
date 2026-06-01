@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::db::ClipboardDb;
@@ -26,6 +27,8 @@ pub struct ClipboardHistoryModel {
     watcher_ref_count: usize,
     /// Gitee 同步 token
     sync_token: Option<String>,
+    /// 防抖上传定时器句柄 — 每次剪贴板变化时重置，5秒静默后才触发上传
+    sync_upload_handle: Option<SpawnedFutureHandle>,
 }
 
 impl Entity for ClipboardHistoryModel {
@@ -57,6 +60,7 @@ impl ClipboardHistoryModel {
             watcher: None,
             watcher_ref_count: 0,
             sync_token: None,
+            sync_upload_handle: None,
         })
     }
 
@@ -71,6 +75,7 @@ impl ClipboardHistoryModel {
             watcher: None,
             watcher_ref_count: 0,
             sync_token: None,
+            sync_upload_handle: None,
         })
     }
 
@@ -175,8 +180,34 @@ impl ClipboardHistoryModel {
     /// 处理从后台线程收到的剪贴板内容
     fn on_clipboard_content(&mut self, content: String, ctx: &mut ModelContext<Self>) {
         let _ = self.add_record(content);
-        self.trigger_sync_upload(ctx);
+        self.schedule_debounced_sync_upload(ctx);
         ctx.notify();
+    }
+
+    /// 调度防抖上传：取消前一个等待中的定时器，启动新的 5 秒倒计时。
+    /// 仅当 5 秒内无新的剪贴板事件时，才会真正触发 `trigger_sync_upload`。
+    fn schedule_debounced_sync_upload(&mut self, ctx: &mut ModelContext<Self>) {
+        // 取消前一个定时器（如果有）
+        if let Some(handle) = self.sync_upload_handle.take() {
+            handle.abort();
+        }
+
+        let debounce_duration = std::time::Duration::from_secs(crate::sync::debounce_secs());
+
+        let new_handle = ctx.spawn_abortable(
+            async move { warpui::r#async::Timer::after(debounce_duration).await },
+            |me, _, ctx| {
+                // 定时器完成（未被取消）→ 触发上传
+                me.sync_upload_handle = None;
+                me.trigger_sync_upload(ctx);
+            },
+            |me, _| {
+                // 定时器被取消（新的剪贴板事件取代了本次）
+                me.sync_upload_handle = None;
+            },
+        );
+
+        self.sync_upload_handle = Some(new_handle);
     }
 
     // ==================== 云同步相关 ====================
