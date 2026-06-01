@@ -204,7 +204,7 @@ pub fn render_transfer_panel(
 
     // 标题栏
     let count = transfers.len();
-    let title_text = format!("传输 ({})", count);
+    let title_text = format!("传输 ({count})");
 
     let title_el = Text::new_inline(title_text, ui_font, ui_font_size)
         .with_color(text_color.into())

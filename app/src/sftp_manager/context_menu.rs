@@ -126,7 +126,35 @@ pub fn render_context_menu(state: &ContextMenuState, appearance: &Appearance) ->
             SftpBrowserAction::RenameEntry(_) => "sftp_ctx:rename",
             SftpBrowserAction::DeleteEntry(_) => "sftp_ctx:delete",
             SftpBrowserAction::DetailsEntry(_) => "sftp_ctx:details",
-            _ => "sftp_ctx:unknown",
+            SftpBrowserAction::NavigateTo(_)
+            | SftpBrowserAction::GoUp
+            | SftpBrowserAction::GoBack
+            | SftpBrowserAction::GoForward
+            | SftpBrowserAction::Refresh
+            | SftpBrowserAction::SelectEntry(_)
+            | SftpBrowserAction::UploadFile
+            | SftpBrowserAction::NewFolder
+            | SftpBrowserAction::ConfirmDelete
+            | SftpBrowserAction::ConfirmRename
+            | SftpBrowserAction::ConfirmNewFolder
+            | SftpBrowserAction::ConfirmOverwrite
+            | SftpBrowserAction::ContextMenu { .. }
+            | SftpBrowserAction::CloseContextMenu
+            | SftpBrowserAction::CloseDialog
+            | SftpBrowserAction::SetSearchFilter(_)
+            | SftpBrowserAction::ClearSearchFilter
+            | SftpBrowserAction::NavigateUp
+            | SftpBrowserAction::DeleteSelected
+            | SftpBrowserAction::CreateFolder
+            | SftpBrowserAction::DragFilesEnter
+            | SftpBrowserAction::DragFilesLeave
+            | SftpBrowserAction::DragAndDropFiles(_)
+            | SftpBrowserAction::ExecuteUpload(_)
+            | SftpBrowserAction::DownloadSaveAs { .. }
+            | SftpBrowserAction::ConfirmMove
+            | SftpBrowserAction::CancelTransfer(_)
+            | SftpBrowserAction::ToggleTransferPanel
+            | SftpBrowserAction::ConfirmCloseTransferPanel => "sftp_ctx:unknown",
         };
         let el = render_menu_item(&item.label, item.action.clone(), appearance, position_id);
         col.add_child(el);

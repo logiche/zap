@@ -28,7 +28,7 @@ const FILE_DATE_WIDTH: f32 = 120.0;
 pub fn file_icon(entry_type: &FileEntryType) -> Icon {
     match entry_type {
         FileEntryType::Directory | FileEntryType::Symlink => Icon::Folder,
-        _ => Icon::File,
+        FileEntryType::File | FileEntryType::Other => Icon::File,
     }
 }
 

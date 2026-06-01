@@ -90,12 +90,10 @@ pub fn list_dir(sftp: &Sftp, path: &Path) -> Result<Vec<FileEntry>, SftpOpsError
                 datetime.format("%Y-%m-%d %H:%M").to_string()
             });
             let perms = &entry.metadata.permissions;
-            let permissions = Some(format!(
-                "{}{}{}",
-                bool_to_rwx(perms.owner_read, perms.owner_write, perms.owner_exec),
-                bool_to_rwx(perms.group_read, perms.group_write, perms.group_exec),
-                bool_to_rwx(perms.other_read, perms.other_write, perms.other_exec),
-            ));
+            let owner = bool_to_rwx(perms.owner_read, perms.owner_write, perms.owner_exec);
+            let group = bool_to_rwx(perms.group_read, perms.group_write, perms.group_exec);
+            let other = bool_to_rwx(perms.other_read, perms.other_write, perms.other_exec);
+            let permissions = Some(format!("{owner}{group}{other}"));
             FileEntry {
                 name: entry.name,
                 path: entry.path,
@@ -168,7 +166,8 @@ pub fn upload_file_streaming(
     let total_size = local_file.metadata().map(|m| m.len()).unwrap_or(0);
 
     // 使用临时路径上传，避免截断已有文件
-    let temp_remote_path = PathBuf::from(format!("{}.sftp_partial", remote_path.display()));
+    let remote_display = remote_path.display();
+    let temp_remote_path = PathBuf::from(format!("{remote_display}.sftp_partial"));
     let mut remote_file = sftp.open(&temp_remote_path, OpenOptions::write())?;
 
     const CHUNK_SIZE: usize = 32 * 1024;
@@ -208,12 +207,26 @@ pub fn upload_file_streaming(
                 },
             );
 
-            // 部分服务器不支持 OVERWRITE 标志，回退到先删除目标文件再重命名
+            // 部分服务器不支持 OVERWRITE 标志，使用备份重命名策略避免数据丢失
             let rename_result = match rename_result {
                 Ok(()) => Ok(()),
                 Err(_) => {
-                    let _ = sftp.remove_file(remote_path);
-                    sftp.rename(
+                    let remote_display = remote_path.display();
+                    let backup_path =
+                        PathBuf::from(format!("{remote_display}.sftp_backup"));
+                    let backup_created = sftp
+                        .rename(
+                            remote_path,
+                            &backup_path,
+                            zap_sftp::types::RenameOptions {
+                                overwrite: false,
+                                atomic: false,
+                                native: false,
+                            },
+                        )
+                        .is_ok();
+
+                    match sftp.rename(
                         &temp_remote_path,
                         remote_path,
                         zap_sftp::types::RenameOptions {
@@ -221,14 +234,37 @@ pub fn upload_file_streaming(
                             atomic: false,
                             native: false,
                         },
-                    )
+                    ) {
+                        Ok(()) => {
+                            if backup_created {
+                                let _ = sftp.remove_file(&backup_path);
+                            }
+                            Ok(())
+                        }
+                        Err(e) => {
+                            // 重命名失败：恢复备份
+                            if backup_created {
+                                let _ = sftp.rename(
+                                    &backup_path,
+                                    remote_path,
+                                    zap_sftp::types::RenameOptions {
+                                        overwrite: false,
+                                        atomic: false,
+                                        native: false,
+                                    },
+                                );
+                            }
+                            Err(e)
+                        }
+                    }
                 }
             };
 
             if let Err(e) = rename_result {
                 // rename 失败时保留远程临时文件，避免数据丢失
+                let temp_display = temp_remote_path.display();
                 return Err(SftpOpsError::Operation(
-                    format!("重命名远程临时文件失败: {e}。临时文件: {}", temp_remote_path.display()),
+                    format!("重命名远程临时文件失败: {e}。临时文件: {temp_display}"),
                 ));
             }
         }
@@ -262,7 +298,8 @@ pub fn download_file_streaming(
     }
 
     // 使用临时路径下载，避免截断已有文件
-    let temp_local_path = PathBuf::from(format!("{}.sftp_partial", local_path.display()));
+    let local_display = local_path.display();
+    let temp_local_path = PathBuf::from(format!("{local_display}.sftp_partial"));
     let mut local_file =
         fs::File::create(&temp_local_path).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
 
@@ -296,8 +333,9 @@ pub fn download_file_streaming(
             // 下载成功：rename 临时文件到目标路径
             if let Err(e) = fs::rename(&temp_local_path, local_path) {
                 // rename 失败时保留本地临时文件，避免数据丢失
+                let temp_display = temp_local_path.display();
                 return Err(SftpOpsError::LocalIo(
-                    format!("重命名失败: {e}。已下载的临时文件保留在: {}", temp_local_path.display()),
+                    format!("重命名失败: {e}。已下载的临时文件保留在: {temp_display}"),
                 ));
             }
         }
@@ -382,16 +420,17 @@ pub fn download_dir_recursive(
             continue;
         }
 
+        let safe_remote_path = normalize_remote_path(&remote_dir.join(&entry.name));
         let local_path = local_dir.join(&entry.name);
 
         match entry.metadata.file_type {
             zap_sftp::types::FileType::Dir => {
-                download_dir_recursive(sftp, &entry.path, &local_path, progress_cb, cancel_flag)?;
+                download_dir_recursive(sftp, &safe_remote_path, &local_path, progress_cb, cancel_flag)?;
             }
             zap_sftp::types::FileType::File
             | zap_sftp::types::FileType::Symlink
             | zap_sftp::types::FileType::Other => {
-                download_file_streaming(sftp, &entry.path, &local_path, progress_cb, cancel_flag)?;
+                download_file_streaming(sftp, &safe_remote_path, &local_path, progress_cb, cancel_flag)?;
             }
         }
     }
@@ -445,7 +484,8 @@ fn shellexpand_path(path: &str) -> String {
     if path.starts_with("~/") {
         if let Some(home) = dirs::home_dir() {
             let home_path = home.display();
-            return format!("{home_path}/{}", &path[2..]);
+            let suffix = &path[2..];
+            return format!("{home_path}/{suffix}");
         }
     }
     path.to_string()

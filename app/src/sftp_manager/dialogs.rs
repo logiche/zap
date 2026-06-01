@@ -492,10 +492,9 @@ fn render_move_dialog(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
+    let target_display = target_dir.display();
     let desc = format!(
-        "将 \"{}\" 移动到 {}",
-        source_name,
-        target_dir.display()
+        "将 \"{source_name}\" 移动到 {target_display}"
     );
 
     render_confirm_dialog(

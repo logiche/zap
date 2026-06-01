@@ -117,12 +117,10 @@ impl SftpBackend for LiveSftpBackend {
             datetime.format("%Y-%m-%d %H:%M").to_string()
         });
         let perms = &metadata.permissions;
-        let permissions = Some(format!(
-            "{}{}{}",
-            sftp_ops::bool_to_rwx(perms.owner_read, perms.owner_write, perms.owner_exec),
-            sftp_ops::bool_to_rwx(perms.group_read, perms.group_write, perms.group_exec),
-            sftp_ops::bool_to_rwx(perms.other_read, perms.other_write, perms.other_exec),
-        ));
+        let owner = sftp_ops::bool_to_rwx(perms.owner_read, perms.owner_write, perms.owner_exec);
+        let group = sftp_ops::bool_to_rwx(perms.group_read, perms.group_write, perms.group_exec);
+        let other = sftp_ops::bool_to_rwx(perms.other_read, perms.other_write, perms.other_exec);
+        let permissions = Some(format!("{owner}{group}{other}"));
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -238,8 +236,9 @@ impl InMemorySftpBackend {
 impl SftpBackend for InMemorySftpBackend {
     fn list_dir(&self, path: &Path) -> Result<Vec<FileEntry>, SftpOpsError> {
         let local = self.to_local(path);
+        let p = path.display();
         let entries = fs::read_dir(&local).map_err(|e| {
-            SftpOpsError::Operation(format!("列出目录失败 {}: {e}", path.display()))
+            SftpOpsError::Operation(format!("列出目录失败 {p}: {e}"))
         })?;
 
         let mut result = Vec::new();
@@ -263,22 +262,25 @@ impl SftpBackend for InMemorySftpBackend {
 
     fn delete_file(&self, path: &Path) -> Result<(), SftpOpsError> {
         let local = self.to_local(path);
+        let p = path.display();
         fs::remove_file(&local).map_err(|e| {
-            SftpOpsError::Operation(format!("删除文件失败 {}: {e}", path.display()))
+            SftpOpsError::Operation(format!("删除文件失败 {p}: {e}"))
         })
     }
 
     fn delete_dir_recursive(&self, path: &Path) -> Result<(), SftpOpsError> {
         let local = self.to_local(path);
+        let p = path.display();
         fs::remove_dir_all(&local).map_err(|e| {
-            SftpOpsError::Operation(format!("递归删除目录失败 {}: {e}", path.display()))
+            SftpOpsError::Operation(format!("递归删除目录失败 {p}: {e}"))
         })
     }
 
     fn create_dir(&self, path: &Path) -> Result<(), SftpOpsError> {
         let local = self.to_local(path);
+        let p = path.display();
         fs::create_dir(&local).map_err(|e| {
-            SftpOpsError::Operation(format!("创建目录失败 {}: {e}", path.display()))
+            SftpOpsError::Operation(format!("创建目录失败 {p}: {e}"))
         })
     }
 
@@ -296,16 +298,18 @@ impl SftpBackend for InMemorySftpBackend {
 
     fn realpath(&self, path: &Path) -> Result<PathBuf, SftpOpsError> {
         let local = self.to_local(path);
+        let p = path.display();
         let canonical = dunce::canonicalize(&local).map_err(|e| {
-            SftpOpsError::Operation(format!("解析路径失败 {}: {e}", path.display()))
+            SftpOpsError::Operation(format!("解析路径失败 {p}: {e}"))
         })?;
         Ok(self.to_remote(&canonical))
     }
 
     fn stat(&self, path: &Path) -> Result<FileEntry, SftpOpsError> {
         let local = self.to_local(path);
+        let p = path.display();
         let meta = fs::symlink_metadata(&local).map_err(|e| {
-            SftpOpsError::Operation(format!("获取文件信息失败 {}: {e}", path.display()))
+            SftpOpsError::Operation(format!("获取文件信息失败 {p}: {e}"))
         })?;
         let name = path
             .file_name()

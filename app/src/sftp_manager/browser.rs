@@ -380,9 +380,18 @@ impl SftpBrowserView {
                     (FileEntryType::Directory, FileEntryType::Directory) => {
                         a.name.to_lowercase().cmp(&b.name.to_lowercase())
                     }
-                    (FileEntryType::Directory, _) => std::cmp::Ordering::Less,
-                    (_, FileEntryType::Directory) => std::cmp::Ordering::Greater,
-                    _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                    (
+                        FileEntryType::Directory,
+                        FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
+                    ) => std::cmp::Ordering::Less,
+                    (
+                        FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
+                        FileEntryType::Directory,
+                    ) => std::cmp::Ordering::Greater,
+                    (
+                        FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
+                        FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
+                    ) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
                 });
                 self.entries = entries;
                 self.selected.clear();
@@ -572,9 +581,18 @@ impl SftpBrowserView {
                             (FileEntryType::Directory, FileEntryType::Directory) => {
                                 a.name.to_lowercase().cmp(&b.name.to_lowercase())
                             }
-                            (FileEntryType::Directory, _) => std::cmp::Ordering::Less,
-                            (_, FileEntryType::Directory) => std::cmp::Ordering::Greater,
-                            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                            (
+                                FileEntryType::Directory,
+                                FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
+                            ) => std::cmp::Ordering::Less,
+                            (
+                                FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
+                                FileEntryType::Directory,
+                            ) => std::cmp::Ordering::Greater,
+                            (
+                                FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
+                                FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
+                            ) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
                         });
                         me.entries = entries;
                         me.selected.clear();
@@ -663,7 +681,7 @@ impl SftpBrowserView {
                 FileEntryType::Directory | FileEntryType::Symlink => {
                     self.navigate_to(entry.path.clone(), ctx);
                 }
-                _ => {
+                FileEntryType::File | FileEntryType::Other => {
                     self.download_entry(index, ctx);
                 }
             }
@@ -708,7 +726,13 @@ impl SftpBrowserView {
 
         let (paths, is_dirs) = match &self.dialog {
             Some(Dialog::DeleteConfirm { paths, is_dirs }) => (paths.clone(), is_dirs.clone()),
-            _ => {
+            Some(Dialog::Rename { .. })
+            | Some(Dialog::CreateFolder { .. })
+            | Some(Dialog::Move { .. })
+            | Some(Dialog::OverwriteConfirm { .. })
+            | Some(Dialog::FileDetails { .. })
+            | Some(Dialog::CloseTransferPanelConfirm)
+            | None => {
                 self.dialog = None;
                 ctx.notify();
                 return;
@@ -1531,7 +1555,13 @@ impl TypedActionView for SftpBrowserView {
                     Some(Dialog::OverwriteConfirm { source, target, file_size, direction }) => {
                         (source.clone(), target.clone(), *file_size, *direction)
                     }
-                    _ => {
+                    Some(Dialog::DeleteConfirm { .. })
+                    | Some(Dialog::Rename { .. })
+                    | Some(Dialog::CreateFolder { .. })
+                    | Some(Dialog::Move { .. })
+                    | Some(Dialog::FileDetails { .. })
+                    | Some(Dialog::CloseTransferPanelConfirm)
+                    | None => {
                         self.dialog = None;
                         ctx.notify();
                         return;
