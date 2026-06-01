@@ -389,9 +389,10 @@ impl AskpassSession {
         }
 
         // 写 askpass 辅助脚本:读取 %WARP_SSH_ASKPASS_FILE% 指向的文件首行,
-        // echo 到 stdout。`set /p` 读首行(去掉换行),`echo` 输出 — 不会追加
-        // 额外字符,也不会因 cmd 的 EOL 处理截断 Unicode。
-        let body = "@echo off\r\nset /p PW=<\"%WARP_SSH_ASKPASS_FILE%\"\r\necho %PW%\r\n";
+        // echo 到 stdout。`set /p` 读首行(去掉换行),`echo !PW!` 输出。
+        // 使用 `setlocal enabledelayedexpansion` + `!PW!` 延迟展开,避免密码
+        // 含 cmd 特殊字符(&, |, <, >, ^)时被 %PW% 的即时展开二次解析截断。
+        let body = "@echo off\r\nsetlocal enabledelayedexpansion\r\nset /p PW=<\"%WARP_SSH_ASKPASS_FILE%\"\r\necho !PW!\r\nendlocal\r\n";
         {
             let mut f = std::fs::OpenOptions::new()
                 .write(true)
