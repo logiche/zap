@@ -14,7 +14,7 @@ use crate::record::ClipboardRecord;
 use crate::watcher::ClipboardWatcher;
 
 /// 默认最大保留条数
-const DEFAULT_MAX_RECORDS: usize = 500;
+const DEFAULT_MAX_RECORDS: usize = 20;
 
 /// 剪贴板历史单例 Model
 pub struct ClipboardHistoryModel {
