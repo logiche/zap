@@ -31,11 +31,14 @@ pub fn format_time(dt: &DateTime<Utc>) -> String {
     if diff.num_seconds() < 60 {
         "刚刚".to_string()
     } else if diff.num_minutes() < 60 {
-        format!("{}分钟前", diff.num_minutes())
+        let mins = diff.num_minutes();
+        format!("{mins}分钟前")
     } else if diff.num_hours() < 24 {
-        format!("{}小时前", diff.num_hours())
+        let hours = diff.num_hours();
+        format!("{hours}小时前")
     } else if diff.num_days() < 7 {
-        format!("{}天前", diff.num_days())
+        let days = diff.num_days();
+        format!("{days}天前")
     } else {
         dt.format("%m-%d %H:%M").to_string()
     }

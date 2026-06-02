@@ -28,6 +28,8 @@ const REQUEST_TIMEOUT_SECS: u64 = 30;
 const CONNECT_TIMEOUT_SECS: u64 = 10;
 /// 上传防抖间隔（秒）
 const DEBOUNCE_SECS: u64 = 5;
+/// find_gist 翻页上限，100/页 × 20 页 = 2000 条
+const FIND_GIST_MAX_PAGES: u32 = 20;
 
 /// 同步错误
 #[derive(Debug, Error)]
@@ -111,33 +113,48 @@ impl ClipboardGistClient {
     }
 
     /// 查找 description 为 TERM_PLUS_CLIPBOARD 的 Gist，返回其 ID
+    ///
+    /// 分页遍历用户所有 Gist（每页 100 条，最多 20 页），避免因目标
+    /// Gist 不在第一页而导致重复创建。
     pub async fn find_gist(&self, token: &str) -> Result<Option<String>, SyncError> {
         if token.is_empty() {
             return Err(SyncError::NoToken);
         }
-        let url = format!("{GIST_API_BASE}/gists");
-        let resp = self
-            .client
-            .get(&url)
-            .header("Authorization", format!("token {token}"))
-            .send()
-            .await?;
 
-        if !resp.status().is_success() {
-            return Err(SyncError::Api {
-                status: resp.status().as_u16(),
-                body: resp.text().await.unwrap_or_default(),
-            });
-        }
+        for page in 1..=FIND_GIST_MAX_PAGES {
+            let url = format!("{GIST_API_BASE}/gists?page={page}&per_page=100");
+            let resp = self
+                .client
+                .get(&url)
+                .header("Authorization", format!("token {token}"))
+                .send()
+                .await?;
 
-        let gists: Vec<serde_json::Value> = resp.json().await?;
-        for gist in &gists {
-            if gist["description"].as_str() == Some(GIST_DESCRIPTION) {
-                if let Some(id) = gist["id"].as_str() {
-                    return Ok(Some(id.to_string()));
+            if !resp.status().is_success() {
+                return Err(SyncError::Api {
+                    status: resp.status().as_u16(),
+                    body: resp.text().await.unwrap_or_default(),
+                });
+            }
+
+            let gists: Vec<serde_json::Value> = resp.json().await?;
+
+            if gists.is_empty() {
+                return Ok(None);
+            }
+
+            for gist in &gists {
+                if gist["description"].as_str() == Some(GIST_DESCRIPTION) {
+                    if let Some(id) = gist["id"].as_str() {
+                        return Ok(Some(id.to_string()));
+                    }
                 }
             }
         }
+
+        log::warn!(
+            "find_gist: 已翻 {FIND_GIST_MAX_PAGES} 页仍未找到 {GIST_DESCRIPTION}, 放弃以避免死循环"
+        );
         Ok(None)
     }
 

@@ -58,8 +58,9 @@ impl AppPanelViewInner {
             ClipboardPageAction::RecordClicked(id) => {
                 if let Some(record) = model.records().iter().find(|r| r.id == *id) {
                     let content = record.content.clone();
+                    let preview = clipboard_history::truncate_chars(&content, 50);
                     events.push(AppPanelViewInnerEvent::ShowToast {
-                        message: format!("已复制: {}", clipboard_history::truncate_chars(&content, 50)),
+                        message: format!("已复制: {preview}"),
                     });
                 }
             }
