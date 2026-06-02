@@ -31,8 +31,9 @@ use crate::ssh_manager::{SshTreeChangedEvent, SshTreeChangedNotifier};
 
 use warp_ssh_manager::{
     AuthType, ConnectionStatus, KeychainSecretStore, NodeKind, SecretKind, SshNode, SshRepository,
-    SshSecretStore, SshServerInfo,
+    SshSecretStore, SshSecretStoreError, SshServerInfo,
 };
+use zeroize::Zeroizing;
 
 const FIELD_LABEL_MARGIN_TOP: f32 = 6.0;
 const FIELD_LABEL_MARGIN_BOTTOM: f32 = 4.0;
@@ -261,8 +262,22 @@ impl SshServerView {
             // 注意:不展示明文密码,只在 keychain 里"存在"时给一个全是 • 的占位 — 不
             // 影响保存语义(空字符串保持密码不变;非空字符串覆盖)。
             // 这里直接清空 buffer,密码保留在 keychain 里;Save 时只在 buffer 非空才写。
+            // 占位模式镜像 root_password_editor(keychain 已存 → "●●●●●●●";
+            // 未存 → 回到 new() 时设的 "•••••••"),给用户一个"留空也能 Test"
+            // 的视觉提示。
+            let pw_saved = KeychainSecretStore
+                .get(&srv.node_id, SecretKind::Password)
+                .unwrap_or(None)
+                .is_some();
             self.password_editor
-                .update(ctx, |e, ctx| e.set_buffer_text("", ctx));
+                .update(ctx, |e, ctx| {
+                    e.set_buffer_text("", ctx);
+                    if pw_saved {
+                        e.set_placeholder_text("●●●●●●●", ctx);
+                    } else {
+                        e.set_placeholder_text("•••••••", ctx);
+                    }
+                });
             let startup_command = srv.startup_command.clone().unwrap_or_default();
             self.startup_command_editor
                 .update(ctx, |e, ctx| e.set_buffer_text(&startup_command, ctx));
@@ -490,7 +505,10 @@ impl SshServerView {
             last_connected_at: None,
         };
 
-        let password = if password.is_empty() { None } else { Some(password) };
+        // 密码立即用 Zeroizing 包裹,确保从 UI 文本框取出后全程内存零化,
+        // 直到 async 测试任务结束 drop。优先级:form 值 > keychain > None。
+        // 详见 `resolve_test_password` 注释。
+        let password = resolve_test_password(&self.node_id, &password, &KeychainSecretStore);
 
         self.is_testing = true;
         self.status = None;
@@ -1155,3 +1173,36 @@ impl BackingView for SshServerView {
         self.focus_handle = Some(focus_handle);
     }
 }
+
+/// 解析"测试连接"用的密码来源,优先级固化:
+/// 1. form 文本非空 → 用 form 值(用户已敲,**不要求**先 Save)
+/// 2. form 空 + keychain 有 → 用 keychain 存的值
+/// 3. form 空 + keychain 无/错 → `None`,后端会返 "Password not provided"
+///
+/// form 永远胜过 keychain — 用户改 host/port 后想测,正在敲的密码就是
+/// 新 host 的,不应被旧 keychain 值盖掉。
+///
+/// author: logic
+/// date: 2026-06-01
+fn resolve_test_password(
+    node_id: &str,
+    editor_text: &str,
+    store: &dyn SshSecretStore,
+) -> Option<Zeroizing<String>> {
+    if !editor_text.is_empty() {
+        return Some(Zeroizing::new(editor_text.to_string()));
+    }
+    match store.get(node_id, SecretKind::Password) {
+        Ok(Some(secret)) => Some(secret),
+        Ok(None) => None,
+        Err(SshSecretStoreError::NoBackend) => None,
+        Err(SshSecretStoreError::Keyring(msg)) => {
+            log::warn!("keychain 读取失败,fallback 失败: {msg}");
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "server_view_tests.rs"]
+mod tests;
