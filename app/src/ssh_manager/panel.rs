@@ -727,13 +727,16 @@ impl SshManagerPanel {
             return;
         };
         let new_name = rs.editor.as_ref(ctx).buffer_text(ctx).trim().to_string();
+        let id = rs.node_id.clone();
+        let was_newly_created = rs.is_newly_created;
         if new_name.is_empty() {
-            // 名字不能为空:撤销
+            // 名字不能为空:撤销。新建文件夹时同时清除选中。
+            if was_newly_created {
+                self.selected_id = None;
+            }
             ctx.notify();
             return;
         }
-        let id = rs.node_id.clone();
-        let was_newly_created = rs.is_newly_created;
         let result =
             warp_ssh_manager::with_conn(|c| Ok(SshRepository::rename_node(c, &id, &new_name)?));
         if let Err(e) = result {
