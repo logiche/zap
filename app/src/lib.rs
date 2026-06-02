@@ -1231,6 +1231,22 @@ fn initialize_app(
                 model.set_sync_token(token);
             });
         }
+
+        // 订阅 Token 变化：用户在设置页/导入流程中写入 Token 时，
+        // 立刻把最新值推给剪贴板 Model，避免 "配了 token 但刷新按钮无效" 的死锁。
+        // 启动 push 仍保留 — subscribe_to_model 不会重放当前状态。
+        ctx.subscribe_to_model(
+            &crate::settings::CloudSyncTokenStore::handle(ctx),
+            |_store, _event, ctx| {
+                let token = crate::settings::CloudSyncTokenStore::as_ref(ctx)
+                    .get(crate::settings::GITEE_TOKEN_KEY)
+                    .unwrap_or("")
+                    .to_string();
+                clipboard_history::ClipboardHistoryModel::handle(ctx).update(ctx, |m, _| {
+                    m.set_sync_token(token);
+                });
+            },
+        );
     }
 
     cfg_if::cfg_if! {

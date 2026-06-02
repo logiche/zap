@@ -27,6 +27,8 @@ pub struct AppPanelViewInner {
     pub current_section: AppPanelSection,
     /// 是否显示清空确认弹窗
     pub confirm_clear_shown: bool,
+    /// 当前展开的剪贴板项 id（None 表示无展开项）
+    pub selected_record_id: Option<i64>,
 }
 
 impl Entity for AppPanelViewInner {
@@ -39,6 +41,7 @@ impl AppPanelViewInner {
         Self {
             current_section: AppPanelSection::default(),
             confirm_clear_shown: false,
+            selected_record_id: None,
         }
     }
 
@@ -48,6 +51,9 @@ impl AppPanelViewInner {
     }
 
     /// 处理剪贴板页面 Action
+    ///
+    /// author logic
+    /// date 2026-06-02
     pub fn handle_clipboard_action(
         &mut self,
         action: &ClipboardPageAction,
@@ -56,16 +62,26 @@ impl AppPanelViewInner {
         let mut events = Vec::new();
         match action {
             ClipboardPageAction::RecordClicked(id) => {
-                if let Some(record) = model.records().iter().find(|r| r.id == *id) {
-                    let content = record.content.clone();
-                    let preview = clipboard_history::truncate_chars(&content, 50);
-                    events.push(AppPanelViewInnerEvent::ShowToast {
-                        message: format!("已复制: {preview}"),
-                    });
+                // 新语义：切换该 id 的展开/收起。仅当 id 真实存在时生效
+                if model.records().iter().any(|r| r.id == *id) {
+                    self.selected_record_id = if self.selected_record_id == Some(*id) {
+                        None
+                    } else {
+                        Some(*id)
+                    };
                 }
+            }
+            ClipboardPageAction::RecordRightClicked { .. }
+            | ClipboardPageAction::ContextMenuClosed
+            | ClipboardPageAction::ContextMenuCopyRequested(_) => {
+                // 纯状态层无副作用，由胶水层处理
             }
             ClipboardPageAction::RecordDeleted(id) => {
                 let _ = model.delete(*id);
+                // 若被删除的正是当前展开项，同步清空选中
+                if self.selected_record_id == Some(*id) {
+                    self.selected_record_id = None;
+                }
             }
             ClipboardPageAction::ClearAllRequested => {
                 self.confirm_clear_shown = true;
@@ -73,12 +89,16 @@ impl AppPanelViewInner {
             ClipboardPageAction::ClearAllConfirmed => {
                 let _ = model.clear_all();
                 self.confirm_clear_shown = false;
+                self.selected_record_id = None;
                 events.push(AppPanelViewInnerEvent::ShowToast {
                     message: "已清空全部剪贴板历史".to_string(),
                 });
             }
             ClipboardPageAction::ClearAllCancelled => {
                 self.confirm_clear_shown = false;
+            }
+            ClipboardPageAction::SyncRefreshRequested => {
+                // 胶水层直接处理，此处无操作
             }
         }
         events
@@ -99,25 +119,61 @@ mod tests {
 
     // --- handle_clipboard_action ---
 
+    // --- RecordClicked 切换展开行为（新语义） ---
+
     #[test]
-    fn handle_action_record_clicked_显示toast() {
+    fn record_clicked_未选中时点击展开() {
         let mut view = test_view();
         let mut model = test_model();
-
-        model.add_record("hello world".to_string()).expect("add failed");
-        let record_id = model.records()[0].id;
+        model.add_record("a".to_string()).expect("add failed");
+        let id = model.records()[0].id;
 
         let events = view.handle_clipboard_action(
-            &ClipboardPageAction::RecordClicked(record_id),
+            &ClipboardPageAction::RecordClicked(id),
             &mut model,
         );
 
-        assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], AppPanelViewInnerEvent::ShowToast { .. }));
+        assert_eq!(view.selected_record_id, Some(id));
+        assert!(events.is_empty(), "RecordClicked 不应产生事件");
     }
 
     #[test]
-    fn handle_action_record_clicked_不存在的id无事件() {
+    fn record_clicked_已选中时点击折叠() {
+        let mut view = test_view();
+        let mut model = test_model();
+        model.add_record("a".to_string()).expect("add failed");
+        let id = model.records()[0].id;
+        view.selected_record_id = Some(id);
+
+        let events = view.handle_clipboard_action(
+            &ClipboardPageAction::RecordClicked(id),
+            &mut model,
+        );
+
+        assert_eq!(view.selected_record_id, None);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn record_clicked_切换到另一条() {
+        let mut view = test_view();
+        let mut model = test_model();
+        model.add_record("first".to_string()).expect("add failed");
+        model.add_record("second".to_string()).expect("add failed");
+        let first_id = model.records().iter().find(|r| r.content == "first").unwrap().id;
+        let second_id = model.records().iter().find(|r| r.content == "second").unwrap().id;
+        view.selected_record_id = Some(first_id);
+
+        view.handle_clipboard_action(
+            &ClipboardPageAction::RecordClicked(second_id),
+            &mut model,
+        );
+
+        assert_eq!(view.selected_record_id, Some(second_id));
+    }
+
+    #[test]
+    fn record_clicked_不存在的id无副作用() {
         let mut view = test_view();
         let mut model = test_model();
 
@@ -126,8 +182,186 @@ mod tests {
             &mut model,
         );
 
+        assert_eq!(view.selected_record_id, None);
         assert!(events.is_empty());
     }
+
+    #[test]
+    fn record_deleted_清空selected_record_id_if_match() {
+        let mut view = test_view();
+        let mut model = test_model();
+        model.add_record("to delete".to_string()).expect("add failed");
+        let id = model.records()[0].id;
+        view.selected_record_id = Some(id);
+
+        view.handle_clipboard_action(
+            &ClipboardPageAction::RecordDeleted(id),
+            &mut model,
+        );
+
+        assert_eq!(view.selected_record_id, None);
+    }
+
+    #[test]
+    fn record_deleted_保留selected_record_id_if_other() {
+        let mut view = test_view();
+        let mut model = test_model();
+        model.add_record("keep".to_string()).expect("add failed");
+        model.add_record("delete".to_string()).expect("add failed");
+        let keep_id = model.records().iter().find(|r| r.content == "keep").unwrap().id;
+        let delete_id = model.records().iter().find(|r| r.content == "delete").unwrap().id;
+        view.selected_record_id = Some(keep_id);
+
+        view.handle_clipboard_action(
+            &ClipboardPageAction::RecordDeleted(delete_id),
+            &mut model,
+        );
+
+        assert_eq!(view.selected_record_id, Some(keep_id));
+    }
+
+    // --- 右键 / 上下文菜单 Action（纯状态层无副作用） ---
+
+    #[test]
+    fn record_right_clicked_无副作用() {
+        let mut view = test_view();
+        let mut model = test_model();
+        model.add_record("a".to_string()).expect("add failed");
+        let id = model.records()[0].id;
+
+        let events = view.handle_clipboard_action(
+            &ClipboardPageAction::RecordRightClicked {
+                record_id: id,
+                position: warpui::geometry::vector::vec2f(0.0, 0.0),
+            },
+            &mut model,
+        );
+
+        assert!(events.is_empty());
+        assert_eq!(view.selected_record_id, None);
+        assert!(view.confirm_clear_shown == false);
+    }
+
+    #[test]
+    fn context_menu_copy_requested_无副作用() {
+        let mut view = test_view();
+        let mut model = test_model();
+        model.add_record("a".to_string()).expect("add failed");
+        let id = model.records()[0].id;
+
+        let events = view.handle_clipboard_action(
+            &ClipboardPageAction::ContextMenuCopyRequested(id),
+            &mut model,
+        );
+
+        assert!(events.is_empty());
+        assert_eq!(view.selected_record_id, None);
+    }
+
+    #[test]
+    fn context_menu_closed_无副作用() {
+        let mut view = test_view();
+        let mut model = test_model();
+        view.selected_record_id = Some(42);
+
+        let events = view.handle_clipboard_action(
+            &ClipboardPageAction::ContextMenuClosed,
+            &mut model,
+        );
+
+        assert!(events.is_empty());
+        assert_eq!(view.selected_record_id, Some(42), "ContextMenuClosed 不应改变 selected_record_id");
+    }
+
+    // --- 右键保留已选中状态（v1.1 新增） ---
+
+    /// 右键一条记录时不应改变当前选中状态。
+    /// 选中和右键是两个独立语义：用户可能既展开浏览某条记录，又对另一条进行复制/删除操作。
+    #[test]
+    fn record_right_clicked_保留已选中状态() {
+        let mut view = test_view();
+        let mut model = test_model();
+        model.add_record("expanded".to_string()).expect("add failed");
+        model.add_record("right_clicked".to_string()).expect("add failed");
+        let expanded_id = model.records().iter().find(|r| r.content == "expanded").unwrap().id;
+        let right_clicked_id = model.records().iter().find(|r| r.content == "right_clicked").unwrap().id;
+        view.selected_record_id = Some(expanded_id);
+
+        let events = view.handle_clipboard_action(
+            &ClipboardPageAction::RecordRightClicked {
+                record_id: right_clicked_id,
+                position: warpui::geometry::vector::vec2f(0.0, 0.0),
+            },
+            &mut model,
+        );
+
+        assert!(events.is_empty(), "RecordRightClicked 不应产生事件");
+        assert_eq!(
+            view.selected_record_id,
+            Some(expanded_id),
+            "右键另一条记录时，已展开项应保持展开"
+        );
+    }
+
+    /// 右键一条不存在的记录 id 时不应改变任何状态。
+    #[test]
+    fn record_right_clicked_不存在的id无副作用() {
+        let mut view = test_view();
+        let mut model = test_model();
+        model.add_record("a".to_string()).expect("add failed");
+        view.selected_record_id = Some(1);
+        let before_selected = view.selected_record_id;
+
+        let events = view.handle_clipboard_action(
+            &ClipboardPageAction::RecordRightClicked {
+                record_id: 99999,
+                position: warpui::geometry::vector::vec2f(10.0, 20.0),
+            },
+            &mut model,
+        );
+
+        assert!(events.is_empty());
+        assert_eq!(view.selected_record_id, before_selected, "右键不存在的 id 不应改变选中状态");
+        assert_eq!(model.records().len(), 1, "右键不存在的 id 不应影响记录列表");
+    }
+
+    /// 完整流程：选中 A → 右键 B → 关闭菜单 → A 仍被选中
+    /// 验证右键生命周期不污染展开状态。
+    #[test]
+    fn 完整流程_选中A右键B关闭菜单A仍展开() {
+        let mut view = test_view();
+        let mut model = test_model();
+        model.add_record("A".to_string()).expect("add failed");
+        model.add_record("B".to_string()).expect("add failed");
+        let a_id = model.records().iter().find(|r| r.content == "A").unwrap().id;
+        let b_id = model.records().iter().find(|r| r.content == "B").unwrap().id;
+
+        // 1. 选中 A
+        view.handle_clipboard_action(
+            &ClipboardPageAction::RecordClicked(a_id),
+            &mut model,
+        );
+        assert_eq!(view.selected_record_id, Some(a_id));
+
+        // 2. 右键 B
+        view.handle_clipboard_action(
+            &ClipboardPageAction::RecordRightClicked {
+                record_id: b_id,
+                position: warpui::geometry::vector::vec2f(50.0, 50.0),
+            },
+            &mut model,
+        );
+        assert_eq!(view.selected_record_id, Some(a_id), "右键 B 不应改变 A 的展开状态");
+
+        // 3. 关闭菜单
+        view.handle_clipboard_action(
+            &ClipboardPageAction::ContextMenuClosed,
+            &mut model,
+        );
+        assert_eq!(view.selected_record_id, Some(a_id), "关闭菜单不应影响展开状态");
+    }
+
+    // --- 兼容旧用例的占位符（已不再适用的旧 RecordClicked 行为由 ContextMenuCopyRequested 承担） ---
 
     #[test]
     fn handle_action_record_deleted() {
@@ -200,6 +434,7 @@ mod tests {
 
         assert_eq!(view.current_section, AppPanelSection::Clipboard);
         assert!(!view.confirm_clear_shown);
+        assert_eq!(view.selected_record_id, None);
     }
 
     // --- SelectSection 按钮 ---
@@ -214,78 +449,6 @@ mod tests {
     }
 
     // --- RecordClicked（点击应用按钮）深入测试 ---
-
-    #[test]
-    fn handle_action_record_clicked_toast包含已复制前缀() {
-        let mut view = test_view();
-        let mut model = test_model();
-
-        model.add_record("test content".to_string()).expect("add failed");
-        let record_id = model.records()[0].id;
-
-        let events = view.handle_clipboard_action(
-            &ClipboardPageAction::RecordClicked(record_id),
-            &mut model,
-        );
-
-        assert_eq!(events.len(), 1);
-        if let AppPanelViewInnerEvent::ShowToast { message } = &events[0] {
-            assert!(message.starts_with("已复制: "));
-            assert!(message.contains("test content"));
-        } else {
-            panic!("expected ShowToast event");
-        }
-    }
-
-    #[test]
-    fn handle_action_record_clicked_长内容截断显示() {
-        let mut view = test_view();
-        let mut model = test_model();
-
-        let long_content = "a".repeat(200);
-        model.add_record(long_content.clone()).expect("add failed");
-        let record_id = model.records()[0].id;
-
-        let events = view.handle_clipboard_action(
-            &ClipboardPageAction::RecordClicked(record_id),
-            &mut model,
-        );
-
-        assert_eq!(events.len(), 1);
-        if let AppPanelViewInnerEvent::ShowToast { message } = &events[0] {
-            // toast 消息中的内容被截断为最多 50 字符
-            let preview_part = message.strip_prefix("已复制: ").expect("should have prefix");
-            assert!(preview_part.chars().count() <= 50);
-        } else {
-            panic!("expected ShowToast event");
-        }
-    }
-
-    #[test]
-    fn handle_action_record_clicked_多条记录点击指定记录() {
-        let mut view = test_view();
-        let mut model = test_model();
-
-        model.add_record("first".to_string()).expect("add failed");
-        model.add_record("second".to_string()).expect("add failed");
-        model.add_record("third".to_string()).expect("add failed");
-
-        // 点击第二条记录（second）
-        let second_id = model.records().iter().find(|r| r.content == "second").unwrap().id;
-        let events = view.handle_clipboard_action(
-            &ClipboardPageAction::RecordClicked(second_id),
-            &mut model,
-        );
-
-        assert_eq!(events.len(), 1);
-        if let AppPanelViewInnerEvent::ShowToast { message } = &events[0] {
-            assert!(message.contains("second"));
-            assert!(!message.contains("first"));
-            assert!(!message.contains("third"));
-        } else {
-            panic!("expected ShowToast event");
-        }
-    }
 
     // --- RecordDeleted 边界测试 ---
 
@@ -434,26 +597,28 @@ mod tests {
     }
 
     #[test]
-    fn 完整流程_点击应用后删除记录() {
+    fn 完整流程_点击展开后删除记录() {
         let mut view = test_view();
         let mut model = test_model();
 
-        model.add_record("to apply then delete".to_string()).expect("add failed");
+        model.add_record("to expand then delete".to_string()).expect("add failed");
         let record_id = model.records()[0].id;
 
-        // 1. 点击记录（应用）→ 显示 toast
+        // 1. 点击记录（展开）→ 设置 selected_record_id，不产生事件
         let events = view.handle_clipboard_action(
             &ClipboardPageAction::RecordClicked(record_id),
             &mut model,
         );
-        assert_eq!(events.len(), 1);
+        assert!(events.is_empty());
+        assert_eq!(view.selected_record_id, Some(record_id));
         assert!(model.records().iter().any(|r| r.id == record_id));
 
-        // 2. 点击删除按钮 → 记录被删除
+        // 2. 点击删除按钮 → 记录被删除，selected_record_id 同步清空
         view.handle_clipboard_action(
             &ClipboardPageAction::RecordDeleted(record_id),
             &mut model,
         );
         assert!(model.records().is_empty());
+        assert_eq!(view.selected_record_id, None);
     }
 }

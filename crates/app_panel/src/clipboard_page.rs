@@ -7,12 +7,15 @@
 //! date 2026-05-31
 
 use chrono::{DateTime, Utc};
+use warpui::geometry::vector::Vector2F;
 
 /// 剪贴板页面的 Action 事件
 #[derive(Clone, Debug)]
 pub enum ClipboardPageAction {
-    /// 点击一条记录（复制到剪贴板）
+    /// 点击一条记录（切换展开/收起）
     RecordClicked(i64),
+    /// 右键一条记录（在指定位置弹出上下文菜单）
+    RecordRightClicked { record_id: i64, position: Vector2F },
     /// 删除一条记录
     RecordDeleted(i64),
     /// 请求全部清空
@@ -21,6 +24,12 @@ pub enum ClipboardPageAction {
     ClearAllConfirmed,
     /// 取消清空
     ClearAllCancelled,
+    /// 手动触发云端同步下载
+    SyncRefreshRequested,
+    /// 关闭剪贴板上下文菜单
+    ContextMenuClosed,
+    /// 上下文菜单请求复制某条记录
+    ContextMenuCopyRequested(i64),
 }
 
 /// 格式化时间为显示用字符串

@@ -110,7 +110,7 @@ impl ClipboardDb {
     /// 查询全部记录（按时间倒序）
     pub fn load_all(&mut self) -> anyhow::Result<Vec<ClipboardRecord>> {
         let rows: Vec<ClipboardRow> = dsl::clipboard_history
-            .order(dsl::id.desc())
+            .order(dsl::created_at.desc())
             .load(&mut self.conn)?;
         Ok(rows.into_iter().map(|r| r.to_record()).collect())
     }

@@ -11,19 +11,28 @@ use app_panel::AppPanelViewInner;
 use chrono::Utc;
 use clipboard_history::ClipboardHistoryModel;
 use pathfinder_color::ColorU;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Dismiss, Element, Expanded, Fill, Flex, Hoverable, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Stack, Text,
+    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Dismiss, Element, Expanded, Fill, Flex, Hoverable,
+    List, ListState, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, ParentElement, PositionedElementAnchor, PositionedElementOffsetBounds,
+    Radius, Rect, SavePosition, Scrollable, ScrollbarWidth, ScrollableElement,
+    Shrinkable, Stack, Text,
 };
 use warpui::platform::Cursor;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    AppContext, Entity, ModelHandle, SingletonEntity as _, TypedActionView,
-    View, ViewContext, ViewHandle, WindowId,
+    AppContext, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View, ViewContext,
+    ViewHandle, WeakViewHandle, WindowId,
 };
+use warp_core::ui::icons::Icon;
+
+use crate::menu::{Event as MenuEvent, Menu, MenuItemFields};
 
 use crate::app_state::{AppPanelPaneSnapshot, LeafContents};
 use crate::appearance::Appearance;
@@ -35,6 +44,7 @@ use crate::pane_group::pane::view;
 use crate::search_bar::SearchBar;
 use crate::ui_components::dialog::{dialog_styles, Dialog};
 use crate::ui_components::icons;
+use crate::ui_components::spinner::{BrailleSpinner, SpinnerStateHandle};
 use crate::view_components::action_button::{ActionButton, DangerPrimaryTheme, DangerSecondaryTheme, NakedTheme};
 use crate::view_components::DismissibleToast;
 use crate::ToastStack;
@@ -57,6 +67,26 @@ pub enum AppPanelAction {
 
 // --- AppPanelView ---
 
+/// 单条剪贴板记录在列表中需要的数据
+#[derive(Clone)]
+struct ClipboardRecordRow {
+    /// 数据库 id
+    id: i64,
+    /// 单行预览文本
+    preview: String,
+    /// 完整内容（用于展开时多行显示）
+    content: String,
+    /// 创建时间
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// 上下文菜单元数据：指向哪条记录、相对面板内容原点的偏移
+#[derive(Clone)]
+struct ClipboardContextMenuState {
+    record_id: i64,
+    offset: warpui::geometry::vector::Vector2F,
+}
+
 /// 应用面板 View（实现 BackingView）
 pub struct AppPanelView {
     inner: AppPanelViewInner,
@@ -73,6 +103,24 @@ pub struct AppPanelView {
     confirm_cancel_button: ViewHandle<ActionButton>,
     /// 确认弹窗清空按钮
     confirm_delete_button: ViewHandle<ActionButton>,
+    /// 刷新同步按钮
+    refresh_button: ViewHandle<ActionButton>,
+    /// 变高行 List 状态（render_fn 闭包 'static，由构造时注入）
+    list_state: ListState<()>,
+    /// 当前已注入到 list_state 的 item 数量（用于 add/remove 协调）
+    rendered_count: Cell<usize>,
+    /// 当前过滤后用于渲染的剪贴板行（render_fn 闭包通过 Rc 共享）
+    rows: Rc<RefCell<Vec<ClipboardRecordRow>>>,
+    /// 内容区 SavePosition id（供右键回调计算菜单偏移）
+    content_position_id: String,
+    /// 滚动条状态
+    scroll_state: Arc<Mutex<warpui::elements::ScrollState>>,
+    /// Spinner 状态
+    spinner_handle: SpinnerStateHandle,
+    /// 上下文菜单视图句柄
+    context_menu: ViewHandle<Menu<AppPanelAction>>,
+    /// 当前打开的上下文菜单状态（None 表示未打开）
+    context_menu_state: Option<ClipboardContextMenuState>,
 }
 
 impl Entity for AppPanelView {
@@ -87,13 +135,12 @@ impl View for AppPanelView {
     fn render(&self, ctx: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(ctx);
         let theme = appearance.theme();
-        let ui_font_family = appearance.ui_font_family();
-        let ui_font_size = appearance.ui_font_size();
 
         // 从搜索编辑器读取实时文本
         let search_term = self.search_editor.as_ref(ctx).buffer_text(ctx);
         let model = ClipboardHistoryModel::handle(ctx);
         let records = model.as_ref(ctx).records();
+        let is_syncing = model.as_ref(ctx).is_syncing();
         let filtered: Vec<_> = if search_term.is_empty() {
             records.iter().collect()
         } else {
@@ -145,108 +192,121 @@ impl View for AppPanelView {
         .with_width(super::app_panel_style::SIDEBAR_WIDTH)
         .finish();
 
-        // --- 搜索框 ---
-        let search_bar_element = Container::new(ChildView::new(&self.search_bar).finish())
+        // --- 搜索框行（搜索栏 + 刷新按钮/Spinner） ---
+        let detail_color: ColorU = theme.nonactive_ui_text_color().into_solid();
+        let ui_font_family = appearance.ui_font_family();
+        let ui_font_size = appearance.ui_font_size();
+
+        let search_bar_element = ChildView::new(&self.search_bar).finish();
+
+        let refresh_or_spinner: Box<dyn Element> = if is_syncing {
+            Box::new(BrailleSpinner::new(
+                ui_font_family,
+                ui_font_size,
+                detail_color,
+                self.spinner_handle.clone(),
+            ))
+        } else {
+            ChildView::new(&self.refresh_button).finish()
+        };
+
+        let search_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(Expanded::new(1.0, search_bar_element).finish())
+            .with_child(
+                Container::new(refresh_or_spinner)
+                    .with_margin_left(super::app_panel_style::REFRESH_BTN_MARGIN_LEFT)
+                    .finish(),
+            )
+            .finish();
+
+        let search_row_container = Container::new(search_row)
             .with_margin_bottom(super::app_panel_style::SEARCH_BAR_MARGIN_BOTTOM)
             .finish();
 
-        // --- 剪贴板记录列表 ---
-        let fg: ColorU = theme.foreground().into_solid();
-        let detail: ColorU = theme.nonactive_ui_text_color().into_solid();
-        let row_hover_bg: Fill = Fill::Solid(theme.nonactive_ui_detail().into_solid());
-        let row_no_bg: Fill = Fill::Solid(ColorU::transparent_black());
-        let del_hover_bg: Fill = Fill::Solid(theme.nonactive_ui_detail().into_solid());
-        let del_no_bg: Fill = Fill::Solid(ColorU::transparent_black());
-
-        let mut records_column = Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_main_axis_size(MainAxisSize::Min);
-
-        for record in &filtered {
-            let preview_str = record.preview.clone();
-            let time_str = format_time_i18n(&record.created_at);
-            let record_id = record.id;
-            let font_family = ui_font_family;
-            let font_size = ui_font_size;
-
-            let row = Hoverable::new(MouseStateHandle::default(), move |state| {
-                let bg = if state.is_hovered() { row_hover_bg } else { row_no_bg };
-
-                let preview = Text::new(preview_str.clone(), font_family, font_size)
-                    .with_color(fg)
-                    .finish();
-                let time = Text::new(time_str.clone(), font_family, super::app_panel_style::timestamp_font_size(appearance))
-                    .with_color(detail)
-                    .finish();
-
-                // 删除按钮（hover 时显示）
-                let delete_btn = if state.is_hovered() {
-                    let del_id = record_id;
-                    Some(
-                        Hoverable::new(MouseStateHandle::default(), move |del_state| {
-                            let del_bg = if del_state.is_hovered() { del_hover_bg } else { del_no_bg };
-                            Container::new(
-                                ConstrainedBox::new(
-                                    icons::Icon::X.to_warpui_icon(detail.into()).finish()
-                                ).with_width(super::app_panel_style::DELETE_ICON_SIZE).with_height(super::app_panel_style::DELETE_ICON_SIZE).finish()
-                            )
-                            .with_background(del_bg)
-                            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(super::app_panel_style::CORNER_RADIUS_SMALL)))
-                            .finish()
-                        })
-                        .with_cursor(Cursor::PointingHand)
-                        .on_click(move |ctx, _, _| {
-                            ctx.dispatch_typed_action(AppPanelAction::Clipboard(
-                                ClipboardPageAction::RecordDeleted(del_id),
-                            ));
-                        })
-                        .finish()
-                    )
-                } else {
-                    None
-                };
-
-                let mut row_content = Flex::row()
-                    .with_main_axis_alignment(MainAxisAlignment::Start)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_child(
-                        Expanded::new(1., Flex::column()
-                            .with_child(preview)
-                            .with_child(time)
-                            .finish()
-                        ).finish()
-                    );
-
-                if let Some(del) = delete_btn {
-                    row_content = row_content.with_child(del);
-                }
-
-                Container::new(row_content.finish())
-                    .with_uniform_padding(super::app_panel_style::RECORD_ROW_PADDING)
-                    .with_background(bg)
-                    .finish()
-            })
-            .with_cursor(Cursor::PointingHand)
-            .on_click(move |ctx, _, _| {
-                ctx.dispatch_typed_action(AppPanelAction::Clipboard(
-                    ClipboardPageAction::RecordClicked(record_id),
-                ));
-            })
-            .finish();
-
-            records_column = records_column.with_child(row);
+        // --- 更新共享 rows（render_fn 闭包会读取这个 Rc） ---
+        {
+            let new_rows: Vec<ClipboardRecordRow> = filtered
+                .iter()
+                .map(|r| ClipboardRecordRow {
+                    id: r.id,
+                    preview: r.preview.clone(),
+                    content: r.content.clone(),
+                    created_at: r.created_at,
+                })
+                .collect();
+            let mut rows_ref = self.rows.borrow_mut();
+            *rows_ref = new_rows;
         }
+
+        // --- 协调 list_state 的 item 数量（add_item / remove） ---
+        // 这里借不到 &mut self，因此使用 cell-stored 字段；
+        // 协调通过在 self 上加 RefCell<usize> 太重，改为：
+        // 我们用 self.rendered_count（usize）跟踪。协调在 View::render 的
+        // 不可变借用中做不了，所以 ListState 的 item 数量变更通过
+        // TypedActionView 内部或单独的 sync 通道——这里采取简单做法：
+        // 在 ListState 创建时按 self.rows 一次性 add 0 个，
+        // 之后每次 render 通过 self.rendered_count 字段增量调整。
+        // 但 render 是 &self，不可变借用，无法调用 list_state.add_item (需要
+        // 内部 RefCell mut borrow)。好在 ListState.add_item 内部已经用
+        // RefCell，所以这里 *可以* 在 &self 中调用 add_item。
+
+        let target_count = self.rows.borrow().len();
+        let current_count = self.rendered_count.get();
+        if target_count > current_count {
+            for _ in current_count..target_count {
+                self.list_state.add_item();
+            }
+        } else if target_count < current_count {
+            for i in (target_count..current_count).rev() {
+                self.list_state.remove(i);
+            }
+        }
+        // 注：上面这两行不修改 self.rendered_count（&self），但实际上
+        // list_state 内部已经更新；count 不一致会导致下次 render 多 add。
+        // 解决方案：把 rendered_count 改为 Cell<usize> 或把 add/remove 推迟
+        // 到 handle_action 里（仅在 selected_record_id 变更或数据变化时同步）。
+        // 这里采用 Cell<usize>。
+        self.rendered_count.set(target_count);
+
+        // 协调展开行的高度缓存失效（如果被删除/合并）
+        if let Some(selected_id) = self.inner.selected_record_id {
+            let rows = self.rows.borrow();
+            if let Some(idx) = rows.iter().position(|r| r.id == selected_id) {
+                self.list_state.invalidate_height_for_index(idx);
+            }
+        }
+
+        // --- 剪贴板记录列表（List + Scrollable） ---
+        let list = List::new(self.list_state.clone()).finish_scrollable();
+
+        let scroll_view = Scrollable::vertical(
+            self.scroll_state.clone(),
+            list,
+            ScrollbarWidth::Auto,
+            theme.nonactive_ui_detail().into(),
+            theme.active_ui_detail().into(),
+            Fill::None,
+        )
+        .with_overlayed_scrollbar()
+        .finish();
+
+        let scrollable: Box<dyn Element> = if self.rows.borrow().is_empty() {
+            Shrinkable::new(1.0, Flex::column().finish()).finish()
+        } else {
+            Shrinkable::new(1.0, scroll_view).finish()
+        };
 
         // --- 全部清空按钮 ---
         let clear_all_button = Align::new(ChildView::new(&self.clear_all_button).finish())
             .finish();
 
-        // --- 内容区布局 ---
-        let content = Container::new(
+        // --- 内容区布局（用 SavePosition 包裹以记录面板内容原点） ---
+        let content_inner = Container::new(
             Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                .with_child(search_bar_element)
-                .with_child(records_column.finish())
+                .with_child(search_row_container)
+                .with_child(scrollable)
                 .with_child(
                     Container::new(clear_all_button)
                         .with_margin_top(super::app_panel_style::CLEAR_BTN_MARGIN_TOP)
@@ -257,6 +317,8 @@ impl View for AppPanelView {
         .with_uniform_padding(super::app_panel_style::CONTENT_PADDING)
         .finish();
 
+        let content = SavePosition::new(content_inner, &self.content_position_id).finish();
+
         let main_layout = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Max)
@@ -264,7 +326,10 @@ impl View for AppPanelView {
             .with_child(Shrinkable::new(1., content).finish())
             .finish();
 
-        // --- 确认清空弹窗 ---
+        // --- 叠加层：确认清空弹窗 + 右键上下文菜单 ---
+        let mut stack = Stack::new();
+        stack.add_child(main_layout);
+
         if self.inner.confirm_clear_shown {
             let dialog = Dialog::new(
                 crate::t!("app-panel-confirm-clear-title"),
@@ -281,9 +346,7 @@ impl View for AppPanelView {
             .build()
             .finish();
 
-            let overlay = Dismiss::new(
-                Align::new(dialog).finish()
-            )
+            let overlay = Dismiss::new(Align::new(dialog).finish())
                 .prevent_interaction_with_other_elements()
                 .on_dismiss(|ctx, _| {
                     ctx.dispatch_typed_action(AppPanelAction::Clipboard(
@@ -291,14 +354,25 @@ impl View for AppPanelView {
                     ));
                 })
                 .finish();
-
-            let mut stack = Stack::new();
-            stack.add_child(main_layout);
             stack.add_child(overlay);
-            stack.finish()
-        } else {
-            main_layout
         }
+
+        if let Some(menu_state) = &self.context_menu_state {
+            // 菜单以 SavePosition 内容区为锚点，offset 已是相对内容区原点的偏移
+            let positioning = OffsetPositioning::offset_from_save_position_element(
+                self.content_position_id.clone(),
+                menu_state.offset,
+                PositionedElementOffsetBounds::WindowByPosition,
+                PositionedElementAnchor::TopLeft,
+                warpui::elements::ChildAnchor::TopLeft,
+            );
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.context_menu).finish(),
+                positioning,
+            );
+        }
+
+        stack.finish()
     }
 }
 
@@ -313,25 +387,98 @@ impl TypedActionView for AppPanelView {
             }
             AppPanelAction::Clipboard(clip_action) => {
                 match clip_action {
-                    ClipboardPageAction::RecordClicked(id) => {
+                    ClipboardPageAction::RecordClicked(_id) => {
+                        // 委托给纯状态层：切换展开/收起
                         let model = ClipboardHistoryModel::handle(ctx);
-                        if let Some(record) = model.as_ref(ctx).records().iter().find(|r| r.id == *id) {
-                            let content = record.content.clone();
-                            // 写入系统剪贴板
+                        model.update(ctx, |model, _ctx| {
+                            let _ = self.inner.handle_clipboard_action(clip_action, model);
+                        });
+                        // 展开状态变化可能改变行高，通知并 invalidate 当前选中行高
+                        if let Some(new_id) = self.inner.selected_record_id {
+                            let rows = self.rows.borrow();
+                            if let Some(idx) = rows.iter().position(|r| r.id == new_id) {
+                                self.list_state.invalidate_height_for_index(idx);
+                            }
+                        }
+                        ctx.notify();
+                    }
+                    ClipboardPageAction::RecordRightClicked { record_id, position } => {
+                        // 打开上下文菜单：构造 items 并设置状态
+                        let copy_action = AppPanelAction::Clipboard(
+                            ClipboardPageAction::ContextMenuCopyRequested(*record_id),
+                        );
+                        let delete_action = AppPanelAction::Clipboard(
+                            ClipboardPageAction::RecordDeleted(*record_id),
+                        );
+                        let items = vec![
+                            MenuItemFields::new(crate::t!("app-panel-context-menu-copy"))
+                                .with_on_select_action(copy_action)
+                                .into_item(),
+                            MenuItemFields::new(crate::t!("app-panel-context-menu-delete"))
+                                .with_on_select_action(delete_action)
+                                .into_item(),
+                        ];
+                        self.context_menu.update(ctx, |menu, ctx| {
+                            menu.set_items(items, ctx);
+                        });
+                        self.context_menu_state = Some(ClipboardContextMenuState {
+                            record_id: *record_id,
+                            offset: *position,
+                        });
+                        ctx.notify();
+                    }
+                    ClipboardPageAction::ContextMenuClosed => {
+                        self.context_menu_state = None;
+                        ctx.notify();
+                    }
+                    ClipboardPageAction::ContextMenuCopyRequested(record_id) => {
+                        let model = ClipboardHistoryModel::handle(ctx);
+                        // 1. 在模型上标记刚写入的内容（抑制 watcher 副作用）
+                        let content_to_write = model
+                            .as_ref(ctx)
+                            .records()
+                            .iter()
+                            .find(|r| r.id == *record_id)
+                            .map(|r| r.content.clone());
+                        if let Some(content) = content_to_write {
+                            model.update(ctx, |model, _ctx| {
+                                model.mark_recently_written(content.clone());
+                            });
+                            // 2. 写入系统剪贴板
                             ctx.clipboard().write(ClipboardContent::plain_text(content.clone()));
-                            // 显示 toast
+                            // 3. 显示 toast
                             let preview = clipboard_history::truncate_chars(&content, 50);
                             let window_id = ctx.window_id();
                             ToastStack::handle(ctx).update(ctx, |stack, ctx| {
                                 stack.add_ephemeral_toast(
-                                    DismissibleToast::success(crate::t!("app-panel-copied-toast", preview = preview.as_str())),
-                                    window_id, ctx,
+                                    DismissibleToast::success(crate::t!(
+                                        "app-panel-copied-toast",
+                                        preview = preview.as_str()
+                                    )),
+                                    window_id,
+                                    ctx,
                                 );
                             });
                         }
+                        // 4. 关闭菜单
+                        self.context_menu_state = None;
+                        ctx.notify();
+                    }
+                    ClipboardPageAction::RecordDeleted(id) => {
+                        // 若被删除的正是当前菜单指向的记录，关闭菜单
+                        if let Some(state) = &self.context_menu_state {
+                            if state.record_id == *id {
+                                self.context_menu_state = None;
+                            }
+                        }
+                        let model = ClipboardHistoryModel::handle(ctx);
+                        model.update(ctx, |model, _ctx| {
+                            let _ = self.inner.handle_clipboard_action(clip_action, model);
+                        });
                         ctx.notify();
                     }
                     ClipboardPageAction::ClearAllConfirmed => {
+                        self.context_menu_state = None;
                         let model = ClipboardHistoryModel::handle(ctx);
                         model.update(ctx, |model, _ctx| {
                             let _ = self.inner.handle_clipboard_action(clip_action, model);
@@ -340,9 +487,19 @@ impl TypedActionView for AppPanelView {
                         ToastStack::handle(ctx).update(ctx, |stack, ctx| {
                             stack.add_ephemeral_toast(
                                 DismissibleToast::success(crate::t!("app-panel-cleared-toast")),
-                                window_id, ctx,
+                                window_id,
+                                ctx,
                             );
                         });
+                        ctx.notify();
+                    }
+                    ClipboardPageAction::SyncRefreshRequested => {
+                        let model = ClipboardHistoryModel::handle(ctx);
+                        if !model.as_ref(ctx).is_syncing() {
+                            model.update(ctx, |model, ctx| {
+                                model.trigger_sync_download(ctx);
+                            });
+                        }
                         ctx.notify();
                     }
                     _ => {
@@ -414,7 +571,7 @@ impl AppPanelPane {
 
     /// 创建新的应用面板 Pane
     ///
-    /// 初始化内部 View 状态、搜索编辑器、确认弹窗按钮，
+    /// 初始化内部 View 状态、搜索编辑器、确认弹窗按钮、上下文菜单，
     /// 并启动剪贴板监听器。Pane 通过 PaneView 包装后集成到 PaneGroup 系统。
     ///
     /// # 参数
@@ -446,9 +603,6 @@ impl AppPanelPane {
                 ..Default::default()
             }, ctx)
         });
-        ctx.subscribe_to_view(&search_editor, |_, _, _, ctx| {
-            ctx.notify();
-        });
         search_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
             editor.set_placeholder_text(crate::t!("app-panel-search-placeholder"), ctx);
@@ -477,12 +631,64 @@ impl AppPanelPane {
                 ));
             })
         });
+        let refresh_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new(crate::t!("common-refresh"), NakedTheme)
+                .with_icon(Icon::RefreshCw04)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(AppPanelAction::Clipboard(
+                        ClipboardPageAction::SyncRefreshRequested,
+                    ));
+                })
+        });
 
-        let app_panel_view = ctx.add_typed_action_view(|_ctx| {
+        // 创建上下文菜单视图（空 items，初始菜单关闭）
+        let context_menu = ctx.add_typed_action_view(|_| {
+            Menu::new()
+                .with_width(super::app_panel_style::CONTEXT_MENU_WIDTH)
+                .with_drop_shadow()
+                .prevent_interaction_with_other_elements()
+        });
+        // 订阅菜单关闭事件：Menu 关闭时通知主 view 清空 context_menu_state
+        let context_menu_for_close = context_menu.clone();
+        let app_panel_view = ctx.add_typed_action_view(|ctx| {
+            ctx.subscribe_to_view(&context_menu_for_close, |_, _, event, ctx| {
+                if matches!(event, MenuEvent::Close { .. }) {
+                    ctx.dispatch_typed_action(&AppPanelAction::Clipboard(
+                        ClipboardPageAction::ContextMenuClosed,
+                    ));
+                }
+            });
+
+            // 创建变高 ListState（render_fn 闭包 'static，捕获 weak handle 与 rows Rc）
+            let weak_handle: WeakViewHandle<AppPanelView> = ctx.handle();
+            let rows: Rc<RefCell<Vec<ClipboardRecordRow>>> =
+                Rc::new(RefCell::new(Vec::new()));
+            let rows_for_render = rows.clone();
+            let content_position_id = format!("app-panel-content-{}", ctx.view_id());
+            let content_position_id_for_render = content_position_id.clone();
+
+            let list_state = ListState::new(move |index, _scroll_offset, app| {
+                Self::render_clipboard_row(
+                    index,
+                    &weak_handle,
+                    &rows_for_render,
+                    &content_position_id_for_render,
+                    app,
+                )
+            });
+
+            // 搜索编辑器订阅：注册在 AppPanelView 自身上下文中，
+            // 确保输入变化时 AppPanelView 被标记为脏并重新渲染过滤列表
+            let search_editor_for_subscription = search_editor.clone();
+            ctx.subscribe_to_view(&search_editor_for_subscription, |_, _, _, ctx| {
+                ctx.notify();
+            });
+
             AppPanelView {
                 inner: AppPanelViewInner {
                     current_section: section,
                     confirm_clear_shown: false,
+                    selected_record_id: None,
                 },
                 pane_configuration: pane_config_clone,
                 focus_handle: None,
@@ -492,6 +698,15 @@ impl AppPanelPane {
                 clear_all_button,
                 confirm_cancel_button,
                 confirm_delete_button,
+                refresh_button,
+                list_state,
+                rendered_count: Cell::new(0),
+                rows,
+                content_position_id,
+                scroll_state: Arc::new(Mutex::new(Default::default())),
+                spinner_handle: SpinnerStateHandle::new(),
+                context_menu,
+                context_menu_state: None,
             }
         });
 
@@ -503,6 +718,162 @@ impl AppPanelPane {
         });
 
         Self::from_view(app_panel_view, ctx)
+    }
+
+    /// 渲染单条剪贴板记录行（List 的 render_fn）
+    ///
+    /// 通过 weak handle 访问 AppPanelView 的 inner 状态（selected_record_id），
+    /// 通过 rows Rc 访问行数据。右击时通过 content_position_id 反查面板内容原点。
+    fn render_clipboard_row(
+        index: usize,
+        weak_handle: &WeakViewHandle<AppPanelView>,
+        rows: &Rc<RefCell<Vec<ClipboardRecordRow>>>,
+        content_position_id: &str,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let row_data = rows.borrow().get(index).cloned();
+        let Some(row) = row_data else {
+            // 越界：返回不可见占位（理论上不应到达）
+            return ConstrainedBox::new(Rect::new().finish())
+                .with_width(1.)
+                .with_height(1.)
+                .finish();
+        };
+
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+        let ff = appearance.ui_font_family();
+        let fs = appearance.ui_font_size();
+        let dfs = super::app_panel_style::timestamp_font_size(appearance);
+        let row_pad = super::app_panel_style::RECORD_ROW_PADDING;
+        let cr_small = super::app_panel_style::CORNER_RADIUS_SMALL;
+        let del_size = super::app_panel_style::DELETE_ICON_SIZE;
+        let row_height = super::app_panel_style::RECORD_ROW_HEIGHT;
+        let expanded_height = super::app_panel_style::EXPANDED_ROW_HEIGHT;
+
+        let fg: ColorU = theme.foreground().into_solid();
+        let detail_color: ColorU = theme.nonactive_ui_text_color().into_solid();
+        let row_hover_bg: Fill = Fill::Solid(theme.nonactive_ui_detail().into_solid());
+        let row_no_bg: Fill = Fill::Solid(ColorU::transparent_black());
+        let row_selected_bg: Fill = Fill::Solid(theme.surface_2().into_solid());
+        let del_hover_bg: Fill = Fill::Solid(theme.nonactive_ui_detail().into_solid());
+        let del_no_bg: Fill = Fill::Solid(ColorU::transparent_black());
+
+        // 读取当前展开状态
+        let expanded = weak_handle
+            .upgrade(app)
+            .map(|h| h.as_ref(app).inner.selected_record_id == Some(row.id))
+            .unwrap_or(false);
+
+        let row_id = row.id;
+        let content_position_id_owned = content_position_id.to_string();
+
+        // 删除按钮（hover 时显示）
+        let body_row = Hoverable::new(MouseStateHandle::default(), move |state| {
+            let bg = if expanded {
+                row_selected_bg
+            } else if state.is_hovered() {
+                row_hover_bg
+            } else {
+                row_no_bg
+            };
+
+            let delete_btn = if state.is_hovered() {
+                let del_id = row_id;
+                Some(
+                    Hoverable::new(MouseStateHandle::default(), move |del_state| {
+                        let del_bg = if del_state.is_hovered() { del_hover_bg } else { del_no_bg };
+                        Container::new(
+                            ConstrainedBox::new(
+                                icons::Icon::X.to_warpui_icon(detail_color.into()).finish(),
+                            )
+                            .with_width(del_size)
+                            .with_height(del_size)
+                            .finish(),
+                        )
+                        .with_background(del_bg)
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(cr_small)))
+                        .finish()
+                    })
+                    .with_cursor(Cursor::PointingHand)
+                    .on_click(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(AppPanelAction::Clipboard(
+                            ClipboardPageAction::RecordDeleted(del_id),
+                        ));
+                    })
+                    .finish(),
+                )
+            } else {
+                None
+            };
+
+            // 在闭包内创建 body / time，避免克隆 Box<dyn Element>
+            let time_str = format_time_i18n(&row.created_at);
+            let time = Text::new(time_str, ff, dfs)
+                .with_color(detail_color)
+                .finish();
+            let body_text = if expanded {
+                row.content.clone()
+            } else {
+                row.preview.clone()
+            };
+            let body = Text::new(body_text, ff, fs).with_color(fg).finish();
+
+            let mut row_content = Flex::row()
+                .with_main_axis_alignment(MainAxisAlignment::Start)
+                .with_cross_axis_alignment(if expanded {
+                    CrossAxisAlignment::Start
+                } else {
+                    CrossAxisAlignment::Center
+                })
+                .with_child(
+                    Expanded::new(
+                        1.,
+                        Flex::column()
+                            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                            .with_child(body)
+                            .with_child(time)
+                            .finish(),
+                    )
+                    .finish(),
+                );
+
+            if let Some(del) = delete_btn {
+                row_content = row_content.with_child(del);
+            }
+
+            Container::new(row_content.finish())
+                .with_uniform_padding(row_pad)
+                .with_background(bg)
+                .finish()
+        });
+
+        let row_element = body_row
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(AppPanelAction::Clipboard(
+                    ClipboardPageAction::RecordClicked(row_id),
+                ));
+            })
+            .on_right_click(move |ctx, _, position| {
+                let Some(bounds) = ctx.element_position_by_id(&content_position_id_owned) else {
+                    return;
+                };
+                let offset = position - bounds.origin();
+                ctx.dispatch_typed_action(AppPanelAction::Clipboard(
+                    ClipboardPageAction::RecordRightClicked {
+                        record_id: row_id,
+                        position: offset,
+                    },
+                ));
+            })
+            .finish();
+
+        let height = if expanded { expanded_height } else { row_height };
+        ConstrainedBox::new(row_element)
+            .with_width(f32::INFINITY)
+            .with_height(height)
+            .finish()
     }
 }
 

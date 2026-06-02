@@ -31,6 +31,16 @@ pub const CORNER_RADIUS_SMALL: f32 = 3.;
 pub const CONFIRM_DIALOG_WIDTH: f32 = 400.;
 /// 确认弹窗按钮间距
 pub const CONFIRM_BTN_MARGIN_LEFT: f32 = 12.;
+/// 刷新按钮与搜索栏左边距
+pub const REFRESH_BTN_MARGIN_LEFT: f32 = 8.;
+/// 上下文菜单宽度
+pub const CONTEXT_MENU_WIDTH: f32 = 160.;
+/// 未选中行行高
+pub const RECORD_ROW_HEIGHT: f32 = 48.;
+/// 选中行内联展开后的最大行数
+pub const EXPANDED_ROW_LINE_COUNT: usize = 6;
+/// 选中行行高
+pub const EXPANDED_ROW_HEIGHT: f32 = 152.;
 
 // --- 字号辅助函数 ---
 

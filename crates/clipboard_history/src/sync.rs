@@ -341,12 +341,12 @@ pub async fn upload_async(
 
 /// 异步下载：获取 Gist + 解密 + 去重
 ///
-/// 返回 `SyncOutcome::Downloaded` 仅当 cloud_version > local_version 时
+/// 始终返回 `SyncOutcome::Downloaded`（Gist 存在且内容有效的前提下）。
+/// 当远程不存在 `TERM_PLUS_CLIPBOARD` Gist 时返回 `AlreadyUpToDate`。
 pub async fn download_async(
     client: &ClipboardGistClient,
     token: &str,
     gist_id: Option<&str>,
-    local_version: i64,
     existing_contents: &HashSet<String>,
 ) -> Result<SyncOutcome, SyncError> {
     let resolved_gist_id = match gist_id {
@@ -359,10 +359,6 @@ pub async fn download_async(
 
     let content = client.get_gist_content(token, &resolved_gist_id).await?;
     let (cloud_version, new_items) = deserialize_records(&content, token, existing_contents)?;
-
-    if cloud_version <= local_version {
-        return Ok(SyncOutcome::AlreadyUpToDate);
-    }
 
     Ok(SyncOutcome::Downloaded {
         version: cloud_version,
@@ -624,19 +620,6 @@ mod tests {
         assert_eq!(version, 5);
         assert_eq!(new_items.len(), 1);
         assert_eq!(new_items[0].0, "cloud_b");
-    }
-
-    #[test]
-    fn download_版本比较_云端版本低于等于本地则无操作() {
-        let records = vec![ClipboardRecord {
-            id: 1,
-            content: "x".to_string(),
-            preview: "x".to_string(),
-            created_at: chrono::DateTime::from_timestamp_millis(1700000000000_i64).unwrap(),
-        }];
-        let cloud_json = serialize_records(&records, 3, TEST_TOKEN).expect("serialize failed");
-        let data: CloudClipboardData = serde_json::from_str(&cloud_json).expect("parse failed");
-        assert_eq!(data.version, 3);
     }
 
     #[test]
