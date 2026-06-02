@@ -201,6 +201,8 @@ walkdir.workspace = true
 warp-workflows.workspace = true
 warp_completer.workspace = true
 warp_core.workspace = true
+app_panel.workspace = true
+clipboard_history.workspace = true
 warp_editor.workspace = true
 warp_js = { workspace = true, optional = true }
 warp_ssh_manager.workspace = true

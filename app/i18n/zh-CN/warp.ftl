@@ -3522,3 +3522,22 @@ workflow-enum-variants = 变体
 quit-warning-dont-save = 不保存
 quit-warning-show-running-processes = 显示运行中的进程
 quit-warning-save-changes-title = 保存更改？
+
+## App Panel
+app-panel-title = 应用
+app-panel-nav-clipboard = 剪贴板
+app-panel-search-placeholder = 搜索剪贴板记录...
+app-panel-clear-all = 全部清空
+app-panel-confirm-clear-title = 确认清空
+app-panel-confirm-clear-desc = 将永久删除所有剪贴板历史记录，此操作无法撤销。
+app-panel-cancel = 取消
+app-panel-confirm = 清空
+app-panel-copied-toast = 已复制: { $preview }
+app-panel-cleared-toast = 已清空全部剪贴板历史
+app-panel-context-menu-copy = 复制
+app-panel-context-menu-delete = 删除
+app-panel-time-just-now = 刚刚
+app-panel-time-minutes-ago = { $count }分钟前
+app-panel-time-hours-ago = { $count }小时前
+app-panel-time-days-ago = { $count }天前
+vertical-tabs-pane-kind-app-panel = 应用

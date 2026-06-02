@@ -17,6 +17,9 @@ pub(super) mod env_var_collection_pane;
 // Zap Wave 7-3:`environment_management_pane` 随 ambient-agent UI 子系统物理删。
 pub(super) mod execution_profile_editor_pane;
 pub(super) mod file_pane;
+pub(crate) mod app_panel_pane;
+pub(crate) mod app_panel_pane_manager;
+pub(super) mod app_panel_style;
 pub(super) mod get_started_pane;
 pub(super) mod get_started_view;
 #[cfg(not(target_family = "wasm"))]
@@ -35,6 +38,7 @@ use std::{any::Any, fmt::Display};
 
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::get_started_view::GetStartedView;
+use crate::pane_group::pane::app_panel_pane::AppPanelView;
 use crate::ssh_manager::server_view::SshServerView;
 use crate::sftp_manager::browser::SftpBrowserView;
 use crate::view_components::action_button::ActionButton;
@@ -146,6 +150,7 @@ pub(crate) enum IPaneType {
     // 物理删。
     Workflow,
     Settings,
+    AppPanel,
     AIFact,
     AIDocument,
     ExecutionProfileEditor,
@@ -171,6 +176,7 @@ impl Display for IPaneType {
             // Zap Wave 7-3:`EnvironmentManagement` Display arm 随 variant 物理删。
             IPaneType::Workflow => write!(f, "Workflow"),
             IPaneType::Settings => write!(f, "Settings"),
+            IPaneType::AppPanel => write!(f, "App Panel"),
             IPaneType::AIFact => write!(f, "AI Fact"),
             IPaneType::AIDocument => write!(f, "AI Document"),
             IPaneType::ExecutionProfileEditor => write!(f, "Execution Profile Editor"),
@@ -501,6 +507,9 @@ impl PaneId {
                 ChildView::<PaneView<WelcomeView>>::with_id(self.0.pane_view_id).finish()
             }
             IPaneType::DeferredPlaceholder => warpui::elements::Empty::new().finish(),
+            IPaneType::AppPanel => {
+                ChildView::<PaneView<AppPanelView>>::with_id(self.0.pane_view_id).finish()
+            }
             #[cfg(test)]
             IPaneType::Dummy => warpui::elements::Empty::new().finish(),
         };

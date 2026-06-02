@@ -16,6 +16,7 @@ use crate::code::editor_management::CodeSource;
 use crate::drive::ZapDriveObjectSettings;
 use crate::root_view::quake_mode_window_id;
 use crate::server::ids::SyncId;
+use app_panel::nav::AppPanelSection;
 use crate::settings_view::SettingsSection;
 use crate::tab::SelectedTabColor;
 use crate::terminal::ShellLaunchData;
@@ -127,6 +128,7 @@ pub enum LeafContents {
     // 子系统物理删。
     Workflow(WorkflowPaneSnapshot),
     Settings(SettingsPaneSnapshot),
+    AppPanel(AppPanelPaneSnapshot),
     AIFact(AIFactPaneSnapshot),
     ExecutionProfileEditor,
     CodeReview(CodeReviewPaneSnapshot),
@@ -182,6 +184,7 @@ impl LeafContents {
             | LeafContents::EnvVarCollection(_)
             | LeafContents::Workflow(_)
             | LeafContents::Settings(_)
+            | LeafContents::AppPanel(_)
             | LeafContents::AIFact(_)
             | LeafContents::ExecutionProfileEditor
             | LeafContents::CodeReview(_)
@@ -290,6 +293,11 @@ pub enum SettingsPaneSnapshot {
         current_page: SettingsSection,
         search_query: Option<String>,
     },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AppPanelPaneSnapshot {
+    pub current_section: AppPanelSection,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -1,4 +1,6 @@
-use crate::util::{set_zsh_histfile_location, write_rc_files_for_test, ShellRcType};
+use crate::util::{write_rc_files_for_test, ShellRcType};
+#[cfg(unix)]
+use crate::util::set_zsh_histfile_location;
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
@@ -170,12 +172,22 @@ impl Builder {
 
         let inner = inner.with_setup(move |utils| {
             let dir = utils.test_dir();
-            write_rc_files_for_test(
-                &dir,
-                "",
-                [ShellRcType::Bash, ShellRcType::Zsh, ShellRcType::Fish],
-            );
-            set_zsh_histfile_location(&dir);
+            cfg_if::cfg_if! {
+                if #[cfg(unix)] {
+                    write_rc_files_for_test(
+                        &dir,
+                        "",
+                        [ShellRcType::Bash, ShellRcType::Zsh, ShellRcType::Fish],
+                    );
+                    set_zsh_histfile_location(&dir);
+                } else if #[cfg(windows)] {
+                    write_rc_files_for_test(
+                        &dir,
+                        "",
+                        [ShellRcType::PowerShell],
+                    );
+                }
+            }
 
             // Set the DISABLE_SAVE_ENV_VAR to make sure we don't write any keybinding changes to the
             // filesystem

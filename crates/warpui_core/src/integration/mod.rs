@@ -198,28 +198,43 @@ impl TestSetupUtils {
 
     /// Configures the home directory path for the test.
     fn set_home_dir_for_test(&mut self) {
-        if cfg!(unix) {
-            self.set_env("ORIGINAL_HOME", dirs::home_dir());
-            // Override the home directory path.  This helps keep tests more
-            // hermetic by making them not depend on the contents of the user's
-            // home directory (which could be very different on a developer's
-            // machine vs. on cloud CI runners).
-            //
-            // We canonicalize the path to resolve symlinks (e.g. /var ->
-            // /private/var on macOS) so that the shell's resolved $PWD matches
-            // $HOME exactly, which is required for ~ substitution to work.
-            let canonical_test_dir = self
-                .test_dir()
-                .canonicalize()
-                .unwrap_or_else(|_| self.test_dir());
-            self.set_env("HOME", Some(canonical_test_dir));
-        } else if cfg!(windows) {
-            self.set_env("ORIGINAL_USERPROFILE", dirs::home_dir());
-            let test_home = self
-                .test_dir()
-                .canonicalize()
-                .unwrap_or_else(|_| self.test_dir());
-            self.set_env("USERPROFILE", Some(test_home));
+        cfg_if::cfg_if! {
+            if #[cfg(unix)] {
+                self.set_env("ORIGINAL_HOME", dirs::home_dir());
+                // Override the home directory path.  This helps keep tests more
+                // hermetic by making them not depend on the contents of the user's
+                // home directory (which could be very different on a developer's
+                // machine vs. on cloud CI runners).
+                //
+                // We canonicalize the path to resolve symlinks (e.g. /var ->
+                // /private/var on macOS) so that the shell's resolved $PWD matches
+                // $HOME exactly, which is required for ~ substitution to work.
+                let canonical_test_dir = self
+                    .test_dir()
+                    .canonicalize()
+                    .unwrap_or_else(|_| self.test_dir());
+                self.set_env("HOME", Some(canonical_test_dir));
+            } else if #[cfg(windows)] {
+                self.set_env("ORIGINAL_USERPROFILE", dirs::home_dir());
+                let test_dir = self.test_dir();
+                // 创建 Windows 应用数据目录结构
+                std::fs::create_dir_all(test_dir.join("AppData/Roaming"))
+                    .expect("Should be able to create AppData/Roaming directory");
+                std::fs::create_dir_all(test_dir.join("AppData/Local"))
+                    .expect("Should be able to create AppData/Local directory");
+                // USERPROFILE 是 Windows 的主目录环境变量
+                self.set_env("USERPROFILE", Some(test_dir.clone()));
+                // 重定向应用数据路径以保持测试隔离
+                self.set_env("APPDATA", Some(test_dir.join("AppData/Roaming")));
+                self.set_env("LOCALAPPDATA", Some(test_dir.join("AppData/Local")));
+                // HOMEDRIVE + HOMEPATH 是 Windows 旧式主目录约定
+                if let Some(s) = test_dir.to_str() {
+                    if s.len() >= 2 {
+                        self.set_env("HOMEDRIVE", Some(s[..2].to_string()));
+                        self.set_env("HOMEPATH", Some(s[2..].to_string()));
+                    }
+                }
+            }
         }
     }
 

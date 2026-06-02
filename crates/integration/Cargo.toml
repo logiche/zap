@@ -39,6 +39,8 @@ strum_macros.workspace = true
 sum_tree.workspace = true
 version-compare.workspace = true
 warp = { workspace = true, features = ["integration_tests"] }
+clipboard_history.workspace = true
+app_panel.workspace = true
 warp_cli = { workspace = true, features = ["integration_tests"] }
 warp_core.workspace = true
 warp-command-signatures.workspace = true
@@ -67,4 +69,4 @@ nix = { workspace = true, features = ["user", "signal"] }
 run_on_linux = []
 run_on_windows = []
 drag_tabs_to_windows = ["warp/drag_tabs_to_windows"]
-default = ["run_on_linux"]
+default = ["run_on_linux", "run_on_windows"]

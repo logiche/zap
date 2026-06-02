@@ -84,13 +84,14 @@ pub fn main() -> Result<()> {
             );
             assert_ne!(home, original_home, "HOME should not be the same as ORIGINAL_HOME!");
         } else if #[cfg(windows)] {
-            let userprofile = std::env::var("USERPROFILE").expect(
-                "Should have a value for the USERPROFILE environment variable",
+            let userprofile = std::env::var("USERPROFILE")
+                .expect("Should have a value for USERPROFILE");
+            let original_userprofile = std::env::var("ORIGINAL_USERPROFILE")
+                .expect("Integration test binary should have set ORIGINAL_USERPROFILE");
+            assert_ne!(
+                userprofile, original_userprofile,
+                "USERPROFILE should not be the same as ORIGINAL_USERPROFILE!"
             );
-            let original_userprofile = std::env::var("ORIGINAL_USERPROFILE").expect(
-                "Integration test binary should have set an ORIGINAL_USERPROFILE environment variable",
-            );
-            assert_ne!(userprofile, original_userprofile, "USERPROFILE should not be the same as ORIGINAL_USERPROFILE!");
         }
     }
 
@@ -158,6 +159,15 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_long_running_block_height_updated);
     register_test!(test_unnecessary_resizes);
     register_test!(test_open_and_close_settings);
+    register_test!(test_open_and_close_app_panel);
+    register_test!(test_reopen_app_panel);
+    register_test!(test_duplicate_open_does_not_create_extra_tabs);
+    register_test!(test_click_record_to_apply);
+    register_test!(test_delete_record);
+    register_test!(test_clear_all_confirmed);
+    register_test!(test_clear_all_cancelled);
+    register_test!(test_search_filters_records);
+    register_test!(test_full_interaction_flow);
     register_test!(test_suggestions_menu_positioning);
     register_test!(test_open_and_close_theme_creator_modal);
     register_test!(test_removing_tabs_out_of_order);

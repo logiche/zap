@@ -3608,3 +3608,22 @@ workflow-enum-variants = Variants
 quit-warning-dont-save = Don't Save
 quit-warning-show-running-processes = Show running processes
 quit-warning-save-changes-title = Save changes?
+
+## App Panel
+app-panel-title = App
+app-panel-nav-clipboard = Clipboard
+app-panel-search-placeholder = Search clipboard...
+app-panel-clear-all = Clear All
+app-panel-confirm-clear-title = Confirm Clear
+app-panel-confirm-clear-desc = This will permanently delete all clipboard history. This action cannot be undone.
+app-panel-cancel = Cancel
+app-panel-confirm = Clear
+app-panel-copied-toast = Copied: { $preview }
+app-panel-cleared-toast = All clipboard history cleared
+app-panel-context-menu-copy = Copy
+app-panel-context-menu-delete = Delete
+app-panel-time-just-now = Just now
+app-panel-time-minutes-ago = { $count }m ago
+app-panel-time-hours-ago = { $count }h ago
+app-panel-time-days-ago = { $count }d ago
+vertical-tabs-pane-kind-app-panel = App

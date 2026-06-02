@@ -3440,3 +3440,22 @@ workflow-enum-variant-placeholder = バリアント
 workflow-enum-variants = バリアント
 quit-warning-dont-save = 保存しない
 quit-warning-show-running-processes = 実行中のプロセスを表示
+
+## App Panel
+app-panel-title = アプリ
+app-panel-nav-clipboard = クリップボード
+app-panel-search-placeholder = クリップボードを検索...
+app-panel-clear-all = すべてクリア
+app-panel-confirm-clear-title = クリアの確認
+app-panel-confirm-clear-desc = すべてのクリップボード履歴が永久に削除されます。この操作は元に戻せません。
+app-panel-cancel = キャンセル
+app-panel-confirm = クリア
+app-panel-copied-toast = コピーしました: { $preview }
+app-panel-cleared-toast = すべてのクリップボード履歴をクリアしました
+app-panel-context-menu-copy = コピー
+app-panel-context-menu-delete = 削除
+app-panel-time-just-now = たった今
+app-panel-time-minutes-ago = { $count }分前
+app-panel-time-hours-ago = { $count }時間前
+app-panel-time-days-ago = { $count }日前
+vertical-tabs-pane-kind-app-panel = アプリ

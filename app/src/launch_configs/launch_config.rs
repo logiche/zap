@@ -150,6 +150,7 @@ impl TryFrom<PaneNodeSnapshot> for PaneTemplateType {
                 | LeafContents::Code(_)
                 | LeafContents::Workflow(_)
                 | LeafContents::Settings(_)
+                | LeafContents::AppPanel(_)
                 | LeafContents::AIFact(_)
                 | LeafContents::CodeReview(_)
                 | LeafContents::ExecutionProfileEditor

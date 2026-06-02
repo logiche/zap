@@ -1081,6 +1081,19 @@ fn initialize_app(
     // SshManager 操作可能撞 missing-table。
     warp_ssh_manager::set_database_path(persistence::database_file_path());
 
+    // 剪贴板历史 Model 使用独立数据库文件
+    let clipboard_db_path = warp_core::paths::secure_state_dir()
+        .unwrap_or_else(warp_core::paths::state_dir)
+        .join("clipboard_history.db");
+    ctx.add_singleton_model(move |_ctx| {
+        clipboard_history::ClipboardHistoryModel::new(&clipboard_db_path)
+            .expect("Failed to initialize ClipboardHistoryModel")
+    });
+
+    ctx.add_singleton_model(|_ctx| {
+        crate::pane_group::pane::app_panel_pane_manager::AppPanelPaneManager::new()
+    });
+
     let persistence_writer = PersistenceWriter::new(writer_handles);
 
     let model_event_sender = persistence_writer.sender();
@@ -1207,6 +1220,35 @@ fn initialize_app(
 
     // 云同步 Token 走 OS 密钥库，不落 TOML。
     ctx.add_singleton_model(crate::settings::CloudSyncTokenStore::new);
+
+    // 将 Gitee Token 传递给剪贴板历史模型
+    {
+        let token = crate::settings::CloudSyncTokenStore::as_ref(ctx)
+            .get(crate::settings::GITEE_TOKEN_KEY)
+            .filter(|t| !t.is_empty())
+            .map(|t| t.to_string());
+        if let Some(token) = token {
+            clipboard_history::ClipboardHistoryModel::handle(ctx).update(ctx, |model, _| {
+                model.set_sync_token(token);
+            });
+        }
+
+        // 订阅 Token 变化：用户在设置页/导入流程中写入 Token 时，
+        // 立刻把最新值推给剪贴板 Model，避免 "配了 token 但刷新按钮无效" 的死锁。
+        // 启动 push 仍保留 — subscribe_to_model 不会重放当前状态。
+        ctx.subscribe_to_model(
+            &crate::settings::CloudSyncTokenStore::handle(ctx),
+            |_store, _event, ctx| {
+                let token = crate::settings::CloudSyncTokenStore::as_ref(ctx)
+                    .get(crate::settings::GITEE_TOKEN_KEY)
+                    .unwrap_or("")
+                    .to_string();
+                clipboard_history::ClipboardHistoryModel::handle(ctx).update(ctx, |m, _| {
+                    m.set_sync_token(token);
+                });
+            },
+        );
+    }
 
     cfg_if::cfg_if! {
         if #[cfg(feature = "crash_reporting")] {

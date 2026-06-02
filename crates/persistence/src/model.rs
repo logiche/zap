@@ -533,6 +533,9 @@ pub const AI_DOCUMENT_PANE_KIND: &str = "ai_document";
 /// The [`pane_leaves::kind`] value for ambient agent (cloud mode) panes.
 pub const AMBIENT_AGENT_PANE_KIND: &str = "ambient_agent";
 
+/// app_panel pane kind
+pub const APP_PANEL_PANE_KIND: &str = "app_panel";
+
 #[derive(Insertable)]
 #[diesel(table_name = terminal_panes)]
 pub struct NewTerminalPane {
