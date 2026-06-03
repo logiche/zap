@@ -6,7 +6,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
+use command::blocking::Command;
 use std::sync::{Arc, LazyLock, RwLock};
 
 use ai::skills::SkillProvider;
