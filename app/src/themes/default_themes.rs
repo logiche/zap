@@ -7,6 +7,7 @@ use warp_core::ui::{
         TerminalColors, VerticalGradient, WarpTheme,
     },
 };
+use warp_core::ui::theme::ui_colors::UiColors;
 
 const DARK_MODE_NORMAL_COLORS: AnsiColors = AnsiColors::new(
     AnsiColor::from_u32(0x616161FF),
@@ -311,7 +312,6 @@ pub(super) fn vscode_2026_dark_colors() -> TerminalColors {
 /// VS Code 2026 Dark 内置主题；配色源: vscode/extensions/theme-defaults/themes/2026-dark.json。
 /// 包含完整 UiColors 覆盖，将 VS Code 的 editor/panel 颜色映射到 Zap UI 组件。
 pub(super) fn vscode_2026_dark() -> WarpTheme {
-    use warp_core::ui::theme::ui_colors::UiColors;
     WarpTheme::new(
         Fill::Solid(ColorU::from_u32(0x191A1BFF)),
         ColorU::from_u32(0xCCCCCCFF),

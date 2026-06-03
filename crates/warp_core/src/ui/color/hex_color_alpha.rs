@@ -39,6 +39,7 @@ fn coloru_from_hex_alpha(s: &str) -> Result<ColorU, String> {
 
     match parsed {
         Ok(bytes) => match bytes.len() {
+            // 此分支处理 #RRGGBB（6 字符）及已展开的 #RGB（3→6 字符）两种情况
             3 => Ok(ColorU {
                 r: bytes[0],
                 g: bytes[1],
