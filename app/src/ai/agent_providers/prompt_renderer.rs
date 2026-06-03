@@ -846,14 +846,15 @@ mod tests {
         // thinking_language.j2 经 footer.j2 注入,所有 system 模板族都引用了 footer。
         // 回归用例确保 8 族模板都会渲染 thinking_language,不会因为某条家族没拉 footer
         // 而漏注入,导致 LLM 在中文用户提问时仍用英文思考。
+        // 8 族对应: anthropic / gpt / beast / codex / gemini / kimi / trinity / default
         for id in [
             "claude-sonnet-4-5",
+            "gpt-3.5-turbo",
             "gpt-4o",
             "gpt-5-codex",
             "gemini-2.5-pro",
             "kimi-k2",
             "trinity-v1",
-            "deepseek-chat",
             "weird-model",
         ] {
             let out = render_system(
