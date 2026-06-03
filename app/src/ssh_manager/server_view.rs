@@ -52,6 +52,10 @@ pub enum SshServerAction {
     SetAuthKey,
     /// 打开系统文件选择器选私钥文件,把路径写入 key_path editor。
     PickKeyFile,
+    /// 切换密码字段明文/遮罩显示。
+    TogglePasswordVisible,
+    /// 切换 root 密码字段明文/遮罩显示。
+    ToggleRootPasswordVisible,
 }
 
 /// 一次性显示在 Save 按钮上方/下方的状态标签。
@@ -90,6 +94,15 @@ pub struct SshServerView {
     auth_password_btn_state: MouseStateHandle,
     auth_key_btn_state: MouseStateHandle,
     key_path_picker_btn_state: MouseStateHandle,
+
+    /// 密码字段是否当前以明文显示。
+    password_visible: bool,
+    /// Root 密码字段是否当前以明文显示。
+    root_password_visible: bool,
+    /// 密码查看眼睛按钮 hover state。
+    password_eye_btn_state: MouseStateHandle,
+    /// Root 密码查看眼睛按钮 hover state。
+    root_password_eye_btn_state: MouseStateHandle,
 
     status: Option<StatusBanner>,
     connection_status: ConnectionStatus,
@@ -135,6 +148,10 @@ impl SshServerView {
             auth_password_btn_state: MouseStateHandle::default(),
             auth_key_btn_state: MouseStateHandle::default(),
             key_path_picker_btn_state: MouseStateHandle::default(),
+            password_visible: false,
+            root_password_visible: false,
+            password_eye_btn_state: MouseStateHandle::default(),
+            root_password_eye_btn_state: MouseStateHandle::default(),
             status: None,
             connection_status: ConnectionStatus::Unknown,
             latency_ms: None,
@@ -320,6 +337,14 @@ impl SshServerView {
             editor.update(ctx, |e, ctx| e.clear_selections(ctx));
         }
 
+        // 重置密码可见性状态
+        self.password_visible = false;
+        self.root_password_visible = false;
+        self.password_editor
+            .update(ctx, |e, ctx| e.set_is_password(true, ctx));
+        self.root_password_editor
+            .update(ctx, |e, ctx| e.set_is_password(true, ctx));
+
         ctx.notify();
     }
 
@@ -407,8 +432,12 @@ impl SshServerView {
                 return;
             }
             // 密码字段写入后清空 buffer,避免明文长时间停留在内存。
+            self.password_visible = false;
             self.password_editor
-                .update(ctx, |e, ctx| e.set_buffer_text("", ctx));
+                .update(ctx, |e, ctx| {
+                    e.set_buffer_text("", ctx);
+                    e.set_is_password(true, ctx);
+                });
         }
 
         // Root password
@@ -419,8 +448,12 @@ impl SshServerView {
                 ctx.notify();
                 return;
             }
+            self.root_password_visible = false;
             self.root_password_editor
-                .update(ctx, |e, ctx| e.set_buffer_text("", ctx));
+                .update(ctx, |e, ctx| {
+                    e.set_buffer_text("", ctx);
+                    e.set_is_password(true, ctx);
+                });
         }
 
         // 4. reload + 状态提示 + 通知所有 SshManagerPanel 刷新树
@@ -557,6 +590,69 @@ impl SshServerView {
 
     /// 打开系统文件选择器选私钥文件,选完写入 key_path editor。回调 ctx
     /// 是 ViewContext<Self>(框架自动维持原 view 上下文)。
+    /// 切换密码字段的明文/遮罩显示。
+    fn on_toggle_password_visible(&mut self, ctx: &mut ViewContext<Self>) {
+        self.password_visible = !self.password_visible;
+        if self.password_visible {
+            // 从 keychain 读取明文密码并显示
+            let secret = KeychainSecretStore
+                .get(&self.node_id, SecretKind::Password)
+                .unwrap_or(None);
+            self.password_editor.update(ctx, |e, ctx| {
+                if let Some(pw) = secret {
+                    e.set_buffer_text(&pw, ctx);
+                }
+                e.set_is_password(false, ctx);
+            });
+        } else {
+            // 恢复遮罩并清空明文
+            self.password_editor.update(ctx, |e, ctx| {
+                e.set_buffer_text("", ctx);
+                e.set_is_password(true, ctx);
+                let pw_saved = KeychainSecretStore
+                    .get(&self.node_id, SecretKind::Password)
+                    .unwrap_or(None)
+                    .is_some();
+                e.set_placeholder_text(if pw_saved { "●●●●●●●" } else { "•••••••" }, ctx);
+            });
+        }
+        ctx.notify();
+    }
+
+    /// 切换 root 密码字段的明文/遮罩显示。
+    fn on_toggle_root_password_visible(&mut self, ctx: &mut ViewContext<Self>) {
+        self.root_password_visible = !self.root_password_visible;
+        if self.root_password_visible {
+            let secret = KeychainSecretStore
+                .get(&self.node_id, SecretKind::RootPassword)
+                .unwrap_or(None);
+            self.root_password_editor.update(ctx, |e, ctx| {
+                if let Some(pw) = secret {
+                    e.set_buffer_text(&pw, ctx);
+                }
+                e.set_is_password(false, ctx);
+            });
+        } else {
+            self.root_password_editor.update(ctx, |e, ctx| {
+                e.set_buffer_text("", ctx);
+                e.set_is_password(true, ctx);
+                let root_pw_saved = KeychainSecretStore
+                    .get(&self.node_id, SecretKind::RootPassword)
+                    .unwrap_or(None)
+                    .is_some();
+                if root_pw_saved {
+                    e.set_placeholder_text("●●●●●●●", ctx);
+                } else {
+                    e.set_placeholder_text(
+                        &crate::t!("workspace-left-panel-ssh-manager-root-password-placeholder"),
+                        ctx,
+                    );
+                }
+            });
+        }
+        ctx.notify();
+    }
+
     fn on_pick_key_file(&mut self, ctx: &mut ViewContext<Self>) {
         let editor = self.key_path_editor.clone();
         ctx.open_file_picker(
@@ -709,6 +805,91 @@ impl SshServerView {
                     &crate::t!("workspace-left-panel-ssh-manager-detail-key-path"),
                     appearance,
                 ))
+                .with_child(row)
+                .finish(),
+        )
+        .with_margin_bottom(FIELD_BLOCK_MARGIN_BOTTOM)
+        .finish()
+    }
+
+    /// 密码字段：label + (输入框 + 眼睛按钮) 一行。
+    /// 点击眼睛图标从 keychain 读取并临时显示明文密码。
+    fn render_password_field(
+        &self,
+        label: &str,
+        editor: &ViewHandle<EditorView>,
+        eye_btn_state: MouseStateHandle,
+        is_visible: bool,
+        action: SshServerAction,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let text_input = appearance
+            .ui_builder()
+            .text_input(editor.clone())
+            .with_style(UiComponentStyles {
+                padding: Some(Coords {
+                    left: 10.,
+                    right: 10.,
+                    top: 6.,
+                    bottom: 6.,
+                }),
+                background: Some(theme.surface_2().into()),
+                border_color: Some(internal_colors::neutral_3(theme).into()),
+                border_width: Some(1.0),
+                border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.0))),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        // 眼睛图标按钮
+        let icon_color = if is_visible {
+            theme.main_text_color(theme.background())
+        } else {
+            theme.sub_text_color(theme.background())
+        };
+        let icon_el = ConstrainedBox::new(
+            crate::ui_components::icons::Icon::Eye
+                .to_warpui_icon(icon_color)
+                .finish(),
+        )
+        .with_width(16.0)
+        .with_height(16.0)
+        .finish();
+        let eye_btn = Hoverable::new(eye_btn_state, move |_| {
+            Container::new(
+                ConstrainedBox::new(icon_el)
+                    .with_width(32.0)
+                    .with_height(32.0)
+                    .finish(),
+            )
+            .with_uniform_padding(2.0)
+            .with_background(theme.surface_2())
+            .with_border(
+                warpui::elements::Border::all(1.0)
+                    .with_border_color(internal_colors::neutral_3(theme)),
+            )
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+            .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(action);
+        })
+        .finish();
+
+        let row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(6.0)
+            .with_child(warpui::elements::Shrinkable::new(1.0, text_input).finish())
+            .with_child(eye_btn)
+            .finish();
+
+        Container::new(
+            Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_child(self.render_label(label, appearance))
                 .with_child(row)
                 .finish(),
         )
@@ -967,6 +1148,10 @@ impl TypedActionView for SshServerView {
             SshServerAction::SetAuthPassword => self.on_set_auth(AuthType::Password, ctx),
             SshServerAction::SetAuthKey => self.on_set_auth(AuthType::Key, ctx),
             SshServerAction::PickKeyFile => self.on_pick_key_file(ctx),
+            SshServerAction::TogglePasswordVisible => self.on_toggle_password_visible(ctx),
+            SshServerAction::ToggleRootPasswordVisible => {
+                self.on_toggle_root_password_visible(ctx)
+            }
         }
     }
 }
@@ -1074,17 +1259,23 @@ impl View for SshServerView {
         // 根据当前 auth_type 显示 password 或 key_path 字段
         match self.auth_type {
             AuthType::Password => {
-                col.add_child(self.render_text_field(
+                col.add_child(self.render_password_field(
                     &crate::t!("workspace-left-panel-ssh-manager-auth-password"),
                     &self.password_editor,
+                    self.password_eye_btn_state.clone(),
+                    self.password_visible,
+                    SshServerAction::TogglePasswordVisible,
                     appearance,
                 ));
             }
             AuthType::Key => {
                 col.add_child(self.render_key_path_field(appearance));
-                col.add_child(self.render_text_field(
+                col.add_child(self.render_password_field(
                     &crate::t!("workspace-left-panel-ssh-manager-passphrase"),
                     &self.password_editor,
+                    self.password_eye_btn_state.clone(),
+                    self.password_visible,
+                    SshServerAction::TogglePasswordVisible,
                     appearance,
                 ));
             }
@@ -1097,9 +1288,12 @@ impl View for SshServerView {
             appearance,
         ));
         // Root 密码
-        col.add_child(self.render_text_field(
+        col.add_child(self.render_password_field(
             &crate::t!("workspace-left-panel-ssh-manager-root-password"),
             &self.root_password_editor,
+            self.root_password_eye_btn_state.clone(),
+            self.root_password_visible,
+            SshServerAction::ToggleRootPasswordVisible,
             appearance,
         ));
         // 备注
