@@ -33,7 +33,8 @@ use crate::settings::{
     InputModeSettings, InputModeState, MarkdownHeadingH1Scale, MarkdownHeadingH2Scale,
     MarkdownHeadingH3Scale, MarkdownHeadingH4Scale, MarkdownHeadingH5Scale, MarkdownHeadingH6Scale,
     MonospaceFontName, PaneSettings, ShouldDimInactivePanes, ThemeSettings, UiFontName,
-    UseSystemTheme, DEFAULT_MONOSPACE_FONT_NAME, UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN,
+    UseSystemTheme, DEFAULT_MONOSPACE_FONT_NAME, MARKDOWN_HEADING_SCALE_MAX,
+    MARKDOWN_HEADING_SCALE_MIN, UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN,
 };
 use crate::settings::{CursorDisplayType, GPUSettings, InputSettings, InputSettingsChangedEvent};
 use crate::terminal::block_list_viewport::InputMode;
@@ -4736,8 +4737,6 @@ struct MarkdownHeadingScaleWidget {
 }
 
 const MARKDOWN_SCALE_INPUT_BOX_WIDTH: f32 = 80.0;
-const MARKDOWN_HEADING_SCALE_MIN: f32 = 0.1;
-const MARKDOWN_HEADING_SCALE_MAX: f32 = 5.0;
 
 fn markdown_heading_scale_defaults() -> [f32; 6] {
     [
