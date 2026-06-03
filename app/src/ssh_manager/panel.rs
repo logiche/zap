@@ -750,6 +750,9 @@ impl SshManagerPanel {
             self.commit_rename(ctx);
         }
 
+        // commit_rename 对新建文件夹(is_newly_created)会清空 selected_id,但单击跳转的
+        // 语义就是选中被点击项,故这里立即覆盖为新 id 是预期行为 —— 清空只针对 Enter/ESC/
+        // 失焦到空白这类无新选择的退出路径,单击本身已提供了新的选择上下文。
         self.selected_id = Some(id.clone());
         let kind = self.nodes.iter().find(|n| n.id == id).map(|n| n.kind);
         match kind {

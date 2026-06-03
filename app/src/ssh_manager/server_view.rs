@@ -390,6 +390,7 @@ impl SshServerView {
         self.root_password_editor
             .update(ctx, |e, ctx| e.set_is_password(true, ctx));
 
+
         ctx.notify();
     }
 
@@ -434,6 +435,7 @@ impl SshServerView {
     pub fn current_group_id(&self) -> &Option<String> {
         &self.current_group_id
     }
+
 
     /// 获取文件夹缓存的数量（用于测试断言）。
     pub fn folders_count(&self) -> usize {

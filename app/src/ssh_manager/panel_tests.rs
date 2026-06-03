@@ -1,6 +1,6 @@
 //! panel.rs 的单元测试 — 覆盖树构建、父级解析和显示排序等纯逻辑。
 //!
-//! author: logic
+//! 作者：logic
 
 use super::*;
 use chrono::NaiveDateTime;

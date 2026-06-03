@@ -89,6 +89,7 @@ pub fn open_server_editor(node_id: String) -> TestStep {
     })
 }
 
+
 /// 在分组下拉选择器中选择指定分组。
 /// 接收 `Arc<Mutex<Option<String>>>` 以便运行时读取文件夹 ID，
 /// 通过 ID 查找对应的 index，然后 dispatch SelectGroup。
