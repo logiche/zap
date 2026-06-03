@@ -906,6 +906,8 @@ settings-cloud-sync-clear = Clear
 settings-cloud-sync-validating = Validating token...
 settings-cloud-sync-token-valid = Token valid ({$username})
 settings-cloud-sync-token-invalid = Invalid token: {$error}
+settings-cloud-sync-auto-sync-label = Auto Sync
+settings-cloud-sync-auto-sync-description = Automatically upload on config change and download on app startup
 
 # --- ANCHOR-SUB-AI-PAGE (agent-settings-ai-page) ---
 # Section / sub-headers
@@ -1070,6 +1072,7 @@ settings-features-mouse-scroll-multiplier = Lines scrolled by mouse wheel interv
 settings-features-auto-open-code-review = Auto open code review panel
 settings-features-max-rows-per-block = Maximum rows in a block
 settings-features-ssh-wrapper = Zap SSH Wrapper
+settings-features-ssh-auto-discovery = Auto-discover SSH hosts
 settings-features-receive-desktop-notifications = Receive desktop notifications from Zap
 settings-features-show-in-app-agent-notifications = Show in-app agent notifications
 settings-features-confirm-close-shared-session = Confirm before closing read-only session
@@ -2252,6 +2255,7 @@ toggle-suffix-audible-bell = audible terminal bell
 toggle-suffix-autosuggestions = autosuggestions
 toggle-suffix-autosuggestion-keybinding-hint = autosuggestion keybinding hint
 toggle-suffix-ssh-wrapper = Zap SSH wrapper
+toggle-suffix-ssh-auto-discovery = auto-discover SSH hosts
 toggle-suffix-link-tooltip = show tooltip on click on links
 toggle-suffix-quit-warning = quit warning modal
 toggle-suffix-alias-expansion = alias expansion
@@ -2752,6 +2756,7 @@ workspace-left-panel-ssh-manager-menu-new-folder = New folder
 workspace-left-panel-ssh-manager-menu-new-server = New SSH server
 workspace-left-panel-ssh-manager-menu-edit = Edit
 workspace-left-panel-ssh-manager-menu-connect = Connect
+workspace-left-panel-ssh-manager-menu-sftp = File Manager
 workspace-left-panel-ssh-manager-menu-clone = Clone
 workspace-left-panel-ssh-manager-menu-delete = Delete
 workspace-left-panel-ssh-manager-pane-hint = Editing fields and "Connect" will arrive in the next iteration. For now this pane shows the saved configuration; tweak it via the SQLite store or the upcoming editor.

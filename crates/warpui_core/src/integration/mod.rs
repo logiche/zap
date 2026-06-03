@@ -215,11 +215,11 @@ impl TestSetupUtils {
             self.set_env("HOME", Some(canonical_test_dir));
         } else if cfg!(windows) {
             self.set_env("ORIGINAL_USERPROFILE", dirs::home_dir());
-            let canonical_test_dir = self
+            let test_home = self
                 .test_dir()
                 .canonicalize()
                 .unwrap_or_else(|_| self.test_dir());
-            self.set_env("USERPROFILE", Some(canonical_test_dir));
+            self.set_env("USERPROFILE", Some(test_home));
         }
     }
 

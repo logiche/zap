@@ -71,24 +71,6 @@ pub fn create_server_via_db(name: &str, parent_id: Option<&str>) -> String {
     .expect("create server via db")
 }
 
-/// 通过 workspace 打开指定服务器的编辑器视图。
-pub fn open_server_editor(node_id: String) -> TestStep {
-    TestStep::new("Open SSH server editor").with_action(move |app, _, _| {
-        let window_id = app.read(|ctx| {
-            WindowManager::as_ref(ctx)
-                .active_window()
-                .expect("no active window")
-        });
-        let workspace = app
-            .views_of_type::<Workspace>(window_id)
-            .and_then(|views| views.first().cloned())
-            .expect("no workspace view");
-        workspace.update(app, |ws, ctx| {
-            ws.open_ssh_server(node_id.clone(), ctx);
-        });
-    })
-}
-
 /// 在分组下拉选择器中选择指定分组。
 /// 接收 `Arc<Mutex<Option<String>>>` 以便运行时读取文件夹 ID，
 /// 通过 ID 查找对应的 index，然后 dispatch SelectGroup。

@@ -56,26 +56,6 @@ pub fn assert_server_group_id(expected: Option<String>) -> AssertionCallback {
     })
 }
 
-/// 断言 DB 中指定节点的 parent_id 等于预期值。
-pub fn assert_node_parent_id(node_id: String, expected: Option<String>) -> AssertionCallback {
-    Box::new(move |_app, _window_id| {
-        let actual: Option<String> = warp_ssh_manager::with_conn(|c| {
-            let nodes = SshRepository::list_nodes(c)?;
-            Ok(nodes
-                .into_iter()
-                .find(|n| n.id == node_id)
-                .and_then(|n| n.parent_id))
-        })
-        .expect("db query");
-        async_assert!(
-            actual == expected,
-            "Expected node parent_id {:?}, but got {:?}",
-            expected,
-            actual
-        )
-    })
-}
-
 /// 断言 DB 中指定节点的 parent_id 等于预期值（运行时从 Arc 中读取 node_id）。
 pub fn assert_db_node_parent_id(
     node_id: Arc<Mutex<Option<String>>>,

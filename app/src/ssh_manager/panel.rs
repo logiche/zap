@@ -34,9 +34,12 @@ use warp_ssh_manager::{
     SshSecretStore, SshServerInfo,
 };
 
+use settings::Setting;
+
 use crate::editor::{
     EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions,
 };
+use crate::settings::SshSettings;
 use crate::ssh_manager::candidates::{CandidateRow, CandidatesViewModel};
 use crate::ssh_manager::{SshTreeChangedEvent, SshTreeChangedNotifier};
 
@@ -54,7 +57,7 @@ const PANEL_HORIZONTAL_PADDING: f32 = 8.0;
 const CONTEXT_MENU_WIDTH: f32 = 200.0;
 const CONTEXT_MENU_ITEM_PADDING_V: f32 = 7.0;
 const CONTEXT_MENU_ITEM_PADDING_H: f32 = 12.0;
-const MAX_CONTEXT_MENU_ITEMS: usize = 4;
+const MAX_CONTEXT_MENU_ITEMS: usize = 5;
 const SSH_PANEL_POSITION_ID: &str = "ssh_manager_panel_root";
 
 #[derive(Clone, Debug)]
@@ -88,6 +91,8 @@ pub enum SshManagerPanelAction {
     ToggleAllFolders,
     /// 双击 server 行 = 连接(开新 tab)。Folder 双击 = 两次 toggle 抵消 no-op。
     DoubleClick(String),
+    /// 右键 server → "文件管理":打开 SFTP 文件浏览器 pane。
+    OpenSftp,
     /// "Candidates" 区段:把 `~/.ssh/config` 的一条候选拷贝进保存树。
     ImportCandidate {
         alias: String,
@@ -108,6 +113,11 @@ pub enum SshManagerPanelEvent {
     /// 用户单击 server 或右键 "连接",请求开 terminal pane 跑 ssh +
     /// SecretInjector。
     OpenSshTerminal {
+        node_id: String,
+        server: SshServerInfo,
+    },
+    /// 用户右键 "SFTP 浏览",请求开 SFTP 文件浏览器 pane。
+    OpenSftpPane {
         node_id: String,
         server: SshServerInfo,
     },
@@ -217,6 +227,13 @@ impl SshManagerPanel {
             },
         );
 
+        // 监听 SshSettings 变更，当自动发现开关切换时刷新候选区段。
+        ctx.subscribe_to_model(&SshSettings::handle(ctx), |me, _, _, ctx| {
+            me.candidates.update(ctx, |vm, ctx| vm.refresh(ctx));
+            me.sync_candidate_row_states(ctx);
+            ctx.notify();
+        });
+
         me
     }
 
@@ -257,10 +274,13 @@ impl SshManagerPanel {
         // 树变化 → 重算 "Added" 集合(PRODUCT.md decision E)。"已导入"按
         // `server.host == candidate.alias` 判定 —— 与 ImportCandidate 的写入
         // 语义对齐(decision I:导入时 `server.host = alias`)。
-        let hosts = list_server_hosts();
-        self.candidates
-            .update(ctx, |vm, ctx| vm.on_tree_changed(hosts, ctx));
-        self.sync_candidate_row_states(ctx);
+        let auto_discover = *SshSettings::as_ref(ctx).enable_ssh_auto_discovery.value();
+        if auto_discover {
+            let hosts = list_server_hosts();
+            self.candidates
+                .update(ctx, |vm, ctx| vm.on_tree_changed(hosts, ctx));
+            self.sync_candidate_row_states(ctx);
+        }
 
         ctx.notify();
     }
@@ -489,6 +509,26 @@ impl SshManagerPanel {
             return;
         };
         self.dispatch_connect_for(&id, ctx);
+    }
+
+    /// 右键 "SFTP 浏览":emit OpenSftpPane 事件。
+    fn on_open_sftp(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(id) = self.selected_id.clone() else {
+            return;
+        };
+        let kind = self.nodes.iter().find(|n| n.id == id).map(|n| n.kind);
+        if !matches!(kind, Some(NodeKind::Server)) {
+            return;
+        }
+        let server = warp_ssh_manager::with_conn(|c| Ok(SshRepository::get_server(c, &id)?))
+            .ok()
+            .flatten();
+        if let Some(server) = server {
+            ctx.emit(SshManagerPanelEvent::OpenSftpPane {
+                node_id: id,
+                server,
+            });
+        }
     }
 
     fn dispatch_connect_for(&self, id: &str, ctx: &mut ViewContext<Self>) {
@@ -1587,6 +1627,10 @@ impl SshManagerPanel {
                             SshManagerPanelAction::Connect,
                         ),
                         (
+                            crate::t!("workspace-left-panel-ssh-manager-menu-sftp"),
+                            SshManagerPanelAction::OpenSftp,
+                        ),
+                        (
                             crate::t!("workspace-left-panel-ssh-manager-menu-clone"),
                             SshManagerPanelAction::CloneServer(id.clone()),
                         ),
@@ -1693,6 +1737,7 @@ impl TypedActionView for SshManagerPanel {
             }
             SshManagerPanelAction::ToggleAllFolders => self.on_toggle_all_folders(ctx),
             SshManagerPanelAction::DoubleClick(id) => self.on_double_click(id.clone(), ctx),
+            SshManagerPanelAction::OpenSftp => self.on_open_sftp(ctx),
             SshManagerPanelAction::ImportCandidate { alias } => {
                 self.on_import_candidate(alias.clone(), ctx)
             }
@@ -1726,11 +1771,17 @@ impl View for SshManagerPanel {
 
         // PRODUCT.md §2:Candidates 区段在已保存树**上方**,共享同一面板
         // 水平内边距。区段在 view-model 还没 refresh 时返回 Empty,不会占
-        // 高度。
-        let candidates_section = Container::new(self.render_candidates(appearance, app))
-            .with_padding_left(PANEL_HORIZONTAL_PADDING - ITEM_PADDING_HORIZONTAL)
-            .with_padding_right(PANEL_HORIZONTAL_PADDING - ITEM_PADDING_HORIZONTAL)
-            .finish();
+        // 高度。自动发现关闭时不渲染区段。
+        let auto_discover =
+            *SshSettings::as_ref(app).enable_ssh_auto_discovery.value();
+        let candidates_section = if auto_discover {
+            Container::new(self.render_candidates(appearance, app))
+                .with_padding_left(PANEL_HORIZONTAL_PADDING - ITEM_PADDING_HORIZONTAL)
+                .with_padding_right(PANEL_HORIZONTAL_PADDING - ITEM_PADDING_HORIZONTAL)
+                .finish()
+        } else {
+            Empty::new().finish()
+        };
 
         let tree = Container::new(self.render_tree(appearance))
             .with_padding_left(PANEL_HORIZONTAL_PADDING - ITEM_PADDING_HORIZONTAL)
