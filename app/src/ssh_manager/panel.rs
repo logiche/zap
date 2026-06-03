@@ -30,13 +30,16 @@ use warpui::{
 };
 
 use warp_ssh_manager::{
-    AuthType, KeychainSecretStore, NodeKind, SecretKind, SshNode, SshRepository, SshSecretStore,
-    SshServerInfo,
+    AuthType, KeychainSecretStore, NodeKind, SecretKind, SshNode, SshRepository,
+    SshSecretStore, SshServerInfo,
 };
+
+use settings::Setting;
 
 use crate::editor::{
     EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions,
 };
+use crate::settings::SshSettings;
 use crate::ssh_manager::candidates::{CandidateRow, CandidatesViewModel};
 use crate::ssh_manager::{SshTreeChangedEvent, SshTreeChangedNotifier};
 
@@ -54,7 +57,7 @@ const PANEL_HORIZONTAL_PADDING: f32 = 8.0;
 const CONTEXT_MENU_WIDTH: f32 = 200.0;
 const CONTEXT_MENU_ITEM_PADDING_V: f32 = 7.0;
 const CONTEXT_MENU_ITEM_PADDING_H: f32 = 12.0;
-const MAX_CONTEXT_MENU_ITEMS: usize = 4;
+const MAX_CONTEXT_MENU_ITEMS: usize = 5;
 const SSH_PANEL_POSITION_ID: &str = "ssh_manager_panel_root";
 
 #[derive(Clone, Debug)]
@@ -64,6 +67,7 @@ pub enum SshManagerPanelAction {
     DeleteSelected,
     Connect,
     Edit,
+    CloneServer(String),
     /// 单击行,处理逻辑根据 node 种类:
     /// - server: 选中 + emit OpenSshTerminal(直接连接)
     /// - folder: 仅选中
@@ -87,6 +91,8 @@ pub enum SshManagerPanelAction {
     ToggleAllFolders,
     /// 双击 server 行 = 连接(开新 tab)。Folder 双击 = 两次 toggle 抵消 no-op。
     DoubleClick(String),
+    /// 右键 server → "文件管理":打开 SFTP 文件浏览器 pane。
+    OpenSftp,
     /// "Candidates" 区段:把 `~/.ssh/config` 的一条候选拷贝进保存树。
     ImportCandidate {
         alias: String,
@@ -107,6 +113,11 @@ pub enum SshManagerPanelEvent {
     /// 用户单击 server 或右键 "连接",请求开 terminal pane 跑 ssh +
     /// SecretInjector。
     OpenSshTerminal {
+        node_id: String,
+        server: SshServerInfo,
+    },
+    /// 用户右键 "SFTP 浏览",请求开 SFTP 文件浏览器 pane。
+    OpenSftpPane {
         node_id: String,
         server: SshServerInfo,
     },
@@ -216,6 +227,13 @@ impl SshManagerPanel {
             },
         );
 
+        // 监听 SshSettings 变更，当自动发现开关切换时刷新候选区段。
+        ctx.subscribe_to_model(&SshSettings::handle(ctx), |me, _, _, ctx| {
+            me.candidates.update(ctx, |vm, ctx| vm.refresh(ctx));
+            me.sync_candidate_row_states(ctx);
+            ctx.notify();
+        });
+
         me
     }
 
@@ -256,10 +274,13 @@ impl SshManagerPanel {
         // 树变化 → 重算 "Added" 集合(PRODUCT.md decision E)。"已导入"按
         // `server.host == candidate.alias` 判定 —— 与 ImportCandidate 的写入
         // 语义对齐(decision I:导入时 `server.host = alias`)。
-        let hosts = list_server_hosts();
-        self.candidates
-            .update(ctx, |vm, ctx| vm.on_tree_changed(hosts, ctx));
-        self.sync_candidate_row_states(ctx);
+        let auto_discover = *SshSettings::as_ref(ctx).enable_ssh_auto_discovery.value();
+        if auto_discover {
+            let hosts = list_server_hosts();
+            self.candidates
+                .update(ctx, |vm, ctx| vm.on_tree_changed(hosts, ctx));
+            self.sync_candidate_row_states(ctx);
+        }
 
         ctx.notify();
     }
@@ -394,17 +415,7 @@ impl SshManagerPanel {
 
     fn on_add_server(&mut self, ctx: &mut ViewContext<Self>) {
         let parent = self.parent_for_new_node();
-        let info_template = SshServerInfo {
-            node_id: String::new(),
-            host: "example.com".into(),
-            port: 22,
-            username: "user".into(),
-            auth_type: AuthType::Password,
-            key_path: None,
-            startup_command: None,
-            notes: None,
-            last_connected_at: None,
-        };
+        let info_template = SshServerInfo::new_default(String::new());
         let result = warp_ssh_manager::with_conn(|c| {
             let name = unique_name(c, parent.as_deref(), "New server")?;
             Ok(SshRepository::create_server(
@@ -425,6 +436,47 @@ impl SshManagerPanel {
             }
             Err(e) => {
                 log::error!("ssh_manager: create server failed: {e:?}");
+                ctx.emit(SshManagerPanelEvent::PersistenceError(e.to_string()));
+            }
+        }
+    }
+
+    fn on_clone_server(&mut self, source_id: &str, ctx: &mut ViewContext<Self>) {
+        let source_id = source_id.to_string();
+        let result = warp_ssh_manager::with_conn(|c| {
+            let source_info = SshRepository::get_server(c, &source_id)?
+                .ok_or_else(|| warp_ssh_manager::SshRepositoryError::NotFound(source_id.clone()))?;
+            let source_node = SshRepository::list_nodes(c)?
+                .into_iter()
+                .find(|n| n.id == source_id)
+                .ok_or_else(|| warp_ssh_manager::SshRepositoryError::NotFound(source_id.clone()))?;
+
+            let parent = source_node.parent_id;
+            let cloned_info = SshServerInfo::clone_from_template(&source_info, String::new());
+            let name = unique_name(c, parent.as_deref(), &format!("{} (copy)", source_node.name))?;
+
+            let new_node = SshRepository::create_server(c, parent.as_deref(), &name, &cloned_info)?;
+
+            // 源服务器在上面已校验存在,直接把 keychain 里的密码 / 私钥口令复制到新节点。
+            let store = KeychainSecretStore;
+            if let Ok(Some(password)) = store.get(&source_id, SecretKind::Password) {
+                let _ = store.set(&new_node.id, SecretKind::Password, &password);
+            }
+            if let Ok(Some(passphrase)) = store.get(&source_id, SecretKind::Passphrase) {
+                let _ = store.set(&new_node.id, SecretKind::Passphrase, &passphrase);
+            }
+
+            Ok(new_node)
+        });
+        match result {
+            Ok(node) => {
+                let new_id = node.id.clone();
+                self.selected_id = Some(new_id.clone());
+                self.refresh_tree(ctx);
+                ctx.emit(SshManagerPanelEvent::OpenServerEditor { node_id: new_id });
+            }
+            Err(e) => {
+                log::error!("ssh_manager: clone server failed: {e:?}");
                 ctx.emit(SshManagerPanelEvent::PersistenceError(e.to_string()));
             }
         }
@@ -457,6 +509,26 @@ impl SshManagerPanel {
             return;
         };
         self.dispatch_connect_for(&id, ctx);
+    }
+
+    /// 右键 "SFTP 浏览":emit OpenSftpPane 事件。
+    fn on_open_sftp(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(id) = self.selected_id.clone() else {
+            return;
+        };
+        let kind = self.nodes.iter().find(|n| n.id == id).map(|n| n.kind);
+        if !matches!(kind, Some(NodeKind::Server)) {
+            return;
+        }
+        let server = warp_ssh_manager::with_conn(|c| Ok(SshRepository::get_server(c, &id)?))
+            .ok()
+            .flatten();
+        if let Some(server) = server {
+            ctx.emit(SshManagerPanelEvent::OpenSftpPane {
+                node_id: id,
+                server,
+            });
+        }
     }
 
     fn dispatch_connect_for(&self, id: &str, ctx: &mut ViewContext<Self>) {
@@ -1555,6 +1627,14 @@ impl SshManagerPanel {
                             SshManagerPanelAction::Connect,
                         ),
                         (
+                            crate::t!("workspace-left-panel-ssh-manager-menu-sftp"),
+                            SshManagerPanelAction::OpenSftp,
+                        ),
+                        (
+                            crate::t!("workspace-left-panel-ssh-manager-menu-clone"),
+                            SshManagerPanelAction::CloneServer(id.clone()),
+                        ),
+                        (
                             crate::t!("workspace-left-panel-ssh-manager-menu-delete"),
                             SshManagerPanelAction::DeleteSelected,
                         ),
@@ -1639,6 +1719,7 @@ impl TypedActionView for SshManagerPanel {
             SshManagerPanelAction::DeleteSelected => self.on_delete_selected(ctx),
             SshManagerPanelAction::Connect => self.on_connect(ctx),
             SshManagerPanelAction::Edit => self.on_edit(ctx),
+            SshManagerPanelAction::CloneServer(id) => self.on_clone_server(id, ctx),
             SshManagerPanelAction::Click(id) => self.on_click(id.clone(), ctx),
             SshManagerPanelAction::StartRename(id) => self.enter_rename(id.clone(), ctx),
             SshManagerPanelAction::CommitRename => self.commit_rename(ctx),
@@ -1656,6 +1737,7 @@ impl TypedActionView for SshManagerPanel {
             }
             SshManagerPanelAction::ToggleAllFolders => self.on_toggle_all_folders(ctx),
             SshManagerPanelAction::DoubleClick(id) => self.on_double_click(id.clone(), ctx),
+            SshManagerPanelAction::OpenSftp => self.on_open_sftp(ctx),
             SshManagerPanelAction::ImportCandidate { alias } => {
                 self.on_import_candidate(alias.clone(), ctx)
             }
@@ -1689,11 +1771,17 @@ impl View for SshManagerPanel {
 
         // PRODUCT.md §2:Candidates 区段在已保存树**上方**,共享同一面板
         // 水平内边距。区段在 view-model 还没 refresh 时返回 Empty,不会占
-        // 高度。
-        let candidates_section = Container::new(self.render_candidates(appearance, app))
-            .with_padding_left(PANEL_HORIZONTAL_PADDING - ITEM_PADDING_HORIZONTAL)
-            .with_padding_right(PANEL_HORIZONTAL_PADDING - ITEM_PADDING_HORIZONTAL)
-            .finish();
+        // 高度。自动发现关闭时不渲染区段。
+        let auto_discover =
+            *SshSettings::as_ref(app).enable_ssh_auto_discovery.value();
+        let candidates_section = if auto_discover {
+            Container::new(self.render_candidates(appearance, app))
+                .with_padding_left(PANEL_HORIZONTAL_PADDING - ITEM_PADDING_HORIZONTAL)
+                .with_padding_right(PANEL_HORIZONTAL_PADDING - ITEM_PADDING_HORIZONTAL)
+                .finish()
+        } else {
+            Empty::new().finish()
+        };
 
         let tree = Container::new(self.render_tree(appearance))
             .with_padding_left(PANEL_HORIZONTAL_PADDING - ITEM_PADDING_HORIZONTAL)
