@@ -1629,9 +1629,9 @@ impl SshManagerPanel {
             .finish()
         };
 
-        // 过滤激活时，为 server 行追加灰色 host 副标签。
+        // 为 server 行追加灰色 host 副标签。
         let host_subtitle: Option<Box<dyn Element>> =
-            if self.filter_query.is_some() && matches!(node.kind, NodeKind::Server) {
+            if matches!(node.kind, NodeKind::Server) {
                 self.server_hosts.get(&node.id).map(|host| {
                     Text::new_inline(
                         host.clone(),
