@@ -194,11 +194,41 @@ pub struct SshManagerPanel {
     /// 区段头的 Refresh / Toggle 按钮 hover state。
     candidates_refresh_btn: MouseStateHandle,
     candidates_toggle_btn: MouseStateHandle,
+
+    /// 服务器过滤搜索输入框。
+    filter_editor: ViewHandle<EditorView>,
+    /// 当前过滤关键词（lowercase），None 表示无过滤。
+    filter_query: Option<String>,
+    /// node_id → host 映射缓存，用于按 IP 地址过滤。
+    server_hosts: HashMap<String, String>,
 }
 
 impl SshManagerPanel {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let candidates = ctx.add_model(|_| CandidatesViewModel::new());
+
+        let filter_editor = ctx.add_typed_action_view(|ctx| {
+            let appearance = warp_core::ui::appearance::Appearance::as_ref(ctx);
+            let theme = appearance.theme();
+            let options = SingleLineEditorOptions {
+                text: TextOptions {
+                    font_size_override: Some(appearance.ui_font_size()),
+                    text_colors_override: Some(TextColors {
+                        default_color: theme.active_ui_text_color(),
+                        disabled_color: theme.disabled_ui_text_color(),
+                        hint_color: theme.sub_text_color(theme.background()),
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut editor = EditorView::single_line(options, ctx);
+            editor.set_placeholder_text(
+                &crate::t!("workspace-left-panel-ssh-manager-filter-placeholder"),
+                ctx,
+            );
+            editor
+        });
 
         let mut me = Self {
             nodes: Vec::new(),
@@ -220,10 +250,34 @@ impl SshManagerPanel {
             candidate_add_states: HashMap::new(),
             candidates_refresh_btn: MouseStateHandle::default(),
             candidates_toggle_btn: MouseStateHandle::default(),
+            filter_editor,
+            filter_query: None,
+            server_hosts: HashMap::new(),
         };
         // 面板首次打开 → 立刻读一次 ssh_config(PRODUCT.md decision A)。
         me.candidates.update(ctx, |vm, ctx| vm.refresh(ctx));
         me.refresh_tree(ctx);
+
+        // 过滤搜索框：输入时实时更新过滤关键词。
+        ctx.subscribe_to_view(&me.filter_editor, |me, _, event, ctx| match event {
+            EditorEvent::Edited(_) | EditorEvent::Enter => {
+                let text = me.filter_editor.as_ref(ctx).buffer_text(ctx);
+                let trimmed = text.trim().to_lowercase();
+                me.filter_query = if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed)
+                };
+                ctx.notify();
+            }
+            EditorEvent::Escape => {
+                me.filter_editor
+                    .update(ctx, |e, ctx| e.set_buffer_text("", ctx));
+                me.filter_query = None;
+                ctx.notify();
+            }
+            _ => {}
+        });
 
         ctx.subscribe_to_model(
             &SshTreeChangedNotifier::handle(ctx),
@@ -286,6 +340,9 @@ impl SshManagerPanel {
                 .update(ctx, |vm, ctx| vm.on_tree_changed(hosts, ctx));
             self.sync_candidate_row_states(ctx);
         }
+
+        // 预加载 node_id → host 映射，供过滤搜索使用。
+        self.server_hosts = load_server_hosts_map();
 
         ctx.notify();
     }
@@ -638,6 +695,50 @@ impl SshManagerPanel {
         true
     }
 
+    /// 计算当前过滤条件下可见的节点 ID 集合。
+    /// 无过滤时返回 None（全部可见）；否则返回 Some(set) 包含：
+    /// - 名称或 host 匹配查询词的 server 节点
+    /// - 这些 server 的所有祖先 folder（保持层级结构）
+    fn filter_visible_ids(&self) -> Option<std::collections::HashSet<String>> {
+        let query = self.filter_query.as_ref()?;
+        let mut visible = std::collections::HashSet::new();
+
+        for node in &self.nodes {
+            if matches!(node.kind, NodeKind::Server) {
+                let name_matches = node.name.to_lowercase().contains(query);
+                let host_matches = self
+                    .server_hosts
+                    .get(&node.id)
+                    .map(|h| h.to_lowercase().contains(query))
+                    .unwrap_or(false);
+
+                if name_matches || host_matches {
+                    visible.insert(node.id.clone());
+                    // 向上遍历所有祖先 folder 并加入可见集
+                    let mut cursor = node.parent_id.as_deref();
+                    while let Some(pid) = cursor {
+                        visible.insert(pid.to_string());
+                        cursor = self
+                            .nodes
+                            .iter()
+                            .find(|n| n.id == pid)
+                            .and_then(|n| n.parent_id.as_deref());
+                    }
+                }
+            }
+        }
+
+        Some(visible)
+    }
+
+    /// 判断节点是否通过当前过滤条件。
+    fn passes_filter(&self, node: &SshNode) -> bool {
+        match self.filter_visible_ids() {
+            None => true,
+            Some(ref set) => set.contains(&node.id),
+        }
+    }
+
     fn on_click(&mut self, id: String, ctx: &mut ViewContext<Self>) {
         // 点击其他行 = 退出当前重命名(commit)
         if self
@@ -942,6 +1043,52 @@ impl SshManagerPanel {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(left_group)
             .with_child(right_group)
+            .finish()
+    }
+
+    /// 搜索/过滤栏：搜索图标 + 输入框，位于工具栏和候选区段之间。
+    fn render_filter_bar(
+        &self,
+        appearance: &warp_core::ui::appearance::Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let icon_color = theme.sub_text_color(theme.background());
+
+        let search_icon = ConstrainedBox::new(
+            crate::ui_components::icons::Icon::SearchSmall
+                .to_warpui_icon(icon_color)
+                .finish(),
+        )
+        .with_width(TOOLBAR_ICON_SIZE)
+        .with_height(TOOLBAR_ICON_SIZE)
+        .finish();
+
+        let editor_input = appearance
+            .ui_builder()
+            .text_input(self.filter_editor.clone())
+            .with_style(UiComponentStyles {
+                padding: Some(Coords {
+                    left: 4.0,
+                    right: 4.0,
+                    top: 4.0,
+                    bottom: 4.0,
+                }),
+                background: Some(theme.surface_2().into()),
+                border_color: Some(internal_colors::neutral_3(theme).into()),
+                border_width: Some(1.0),
+                border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.0))),
+                font_size: Some(appearance.ui_font_size()),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(4.0)
+            .with_child(search_icon)
+            .with_child(warpui::elements::Shrinkable::new(1.0, editor_input).finish())
+            .with_main_axis_size(MainAxisSize::Max)
             .finish()
     }
 
@@ -1354,10 +1501,10 @@ impl SshManagerPanel {
 
     fn render_tree(&self, appearance: &warp_core::ui::appearance::Appearance) -> Box<dyn Element> {
         let mut col = Flex::column();
+        let theme = appearance.theme();
+        let muted = theme.sub_text_color(theme.background());
 
         if self.nodes.is_empty() {
-            let theme = appearance.theme();
-            let muted = theme.sub_text_color(theme.background());
             col.add_child(
                 Container::new(
                     Text::new_inline(
@@ -1375,11 +1522,35 @@ impl SshManagerPanel {
                 .finish(),
             );
         } else {
-            for node in &self.nodes {
-                if !self.is_visible(node) {
-                    continue;
+            let has_any_visible = self
+                .nodes
+                .iter()
+                .any(|n| self.is_visible(n) && self.passes_filter(n));
+            if !has_any_visible && self.filter_query.is_some() {
+                // 过滤无匹配结果
+                col.add_child(
+                    Container::new(
+                        Text::new_inline(
+                            crate::t!("workspace-left-panel-ssh-manager-filter-no-results"),
+                            appearance.ui_font_family(),
+                            appearance.ui_font_subheading(),
+                        )
+                        .with_color(muted.into())
+                        .finish(),
+                    )
+                    .with_padding_top(20.0)
+                    .with_padding_bottom(20.0)
+                    .with_padding_left(ITEM_PADDING_HORIZONTAL)
+                    .with_padding_right(ITEM_PADDING_HORIZONTAL)
+                    .finish(),
+                );
+            } else {
+                for node in &self.nodes {
+                    if !self.is_visible(node) || !self.passes_filter(node) {
+                        continue;
+                    }
+                    col.add_child(self.render_row(node, appearance));
                 }
-                col.add_child(self.render_row(node, appearance));
             }
         }
         let inner = col
@@ -1487,7 +1658,23 @@ impl SshManagerPanel {
             .finish()
         };
 
-        let row = Flex::row()
+        // 为 server 行追加灰色 host 副标签。
+        let host_subtitle: Option<Box<dyn Element>> =
+            if matches!(node.kind, NodeKind::Server) {
+                self.server_hosts.get(&node.id).map(|host| {
+                    Text::new_inline(
+                        host.clone(),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
+                    )
+                    .with_color(theme.sub_text_color(theme.background()).into())
+                    .finish()
+                })
+            } else {
+                None
+            };
+
+        let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(ITEM_ICON_TEXT_SPACING)
             .with_child(
@@ -1497,9 +1684,17 @@ impl SshManagerPanel {
             )
             .with_child(chevron_el)
             .with_child(icon_el)
-            .with_child(label_or_editor)
-            .with_main_axis_size(MainAxisSize::Min)
-            .finish();
+            .with_child(label_or_editor);
+
+        if let Some(subtitle) = host_subtitle {
+            row = row.with_child(
+                Container::new(subtitle)
+                    .with_margin_left(4.0)
+                    .finish(),
+            );
+        }
+
+        let row = row.with_main_axis_size(MainAxisSize::Min).finish();
 
         let state = self.row_states.get(&node.id).cloned().unwrap_or_default();
         let id_for_click = node.id.clone();
@@ -1791,6 +1986,13 @@ impl View for SshManagerPanel {
             .with_uniform_padding(8.0)
             .finish();
 
+        // 搜索/过滤栏，位于工具栏和候选区段之间。
+        let filter_bar = Container::new(self.render_filter_bar(appearance))
+            .with_padding_left(PANEL_HORIZONTAL_PADDING)
+            .with_padding_right(PANEL_HORIZONTAL_PADDING)
+            .with_padding_bottom(4.0)
+            .finish();
+
         // PRODUCT.md §2:Candidates 区段在已保存树**上方**,共享同一面板
         // 水平内边距。区段在 view-model 还没 refresh 时返回 Empty,不会占
         // 高度。自动发现关闭时不渲染区段。
@@ -1819,6 +2021,7 @@ impl View for SshManagerPanel {
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                 .with_child(toolbar)
+                .with_child(filter_bar)
                 .with_child(candidates_section)
                 .with_child(tree_filled)
                 .finish(),
@@ -1921,6 +2124,22 @@ fn list_server_hosts() -> Vec<String> {
     .unwrap_or_else(|e| {
         log::warn!("ssh_manager: failed to list server hosts for candidates: {e:?}");
         Vec::new()
+    })
+}
+
+/// 加载 node_id → host 映射，供过滤搜索按 IP 地址匹配。
+fn load_server_hosts_map() -> HashMap<String, String> {
+    use diesel::prelude::*;
+    use persistence::schema::ssh_servers;
+    warp_ssh_manager::with_conn(|conn| {
+        let rows: Vec<(String, String)> = ssh_servers::table
+            .select((ssh_servers::node_id, ssh_servers::host))
+            .load(conn)?;
+        Ok(rows.into_iter().collect())
+    })
+    .unwrap_or_else(|e| {
+        log::warn!("ssh_manager: failed to load server hosts map: {e:?}");
+        HashMap::new()
     })
 }
 

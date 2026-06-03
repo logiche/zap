@@ -4669,6 +4669,12 @@ impl EditorView {
         });
     }
 
+    /// 运行时切换密码遮罩模式
+    pub fn set_is_password(&mut self, is_password: bool, ctx: &mut ViewContext<Self>) {
+        self.is_password = is_password;
+        ctx.notify();
+    }
+
     fn tab(&mut self, ctx: &mut ViewContext<Self>) {
         if self.can_edit(ctx) {
             match self.propagate_vertical_navigation_keys {
